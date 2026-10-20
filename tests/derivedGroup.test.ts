@@ -16,9 +16,31 @@ HUBBLE SPACE TELESCOPE,1990-037B,2026-08-06T01:17:37.872384,15.49359774,0.000721
 starlink-1003,2019-067C,2026-08-06T01:17:37.872384,15.49359774,0.00072161,51.6321,53.3065,17.1615,342.9616,0,U,44003,999,57948,0.00007969016,0.00003997,0
 `;
 
+// Requested demo members plus the operational Galileo (IOV/FOC) NORAD IDs from Celestrak's GALILEO group.
+const demoRequestedIds = [1361, 43689, 38771, 36037, 62256, 25989, 47719, 25415, 25982, 43056, 40545, 61183, 49810];
+const demoGalileoIds = [
+	37846, 37847, 38857, 40128, 40129, 40544, 40545, 40890, 41174, 41175, 41549, 41550, 41859, 41860, 41861, 41862, 43055, 43056,
+	43057, 43058, 43564, 43565, 43566, 43567, 49809, 49810, 59598, 59600, 61182, 61183, 67160, 67162,
+];
+const demoExpectedIds = [...new Set([...demoRequestedIds, ...demoGalileoIds])];
+
+const mockCsvHeader = mockCsv.split("\n")[0] ?? "";
+
+function demoCsvRow(noradId: number): string {
+	return `SAT-${noradId},2020-001A,2026-08-06T01:17:37.872384,15.49359774,0.00072161,51.6321,53.3065,17.1615,342.9616,0,U,${noradId},999,57948,0.00007969016,0.00003997,0`;
+}
+
+function buildDemoCsv(noradIds: number[]): string {
+	return [mockCsvHeader, ...noradIds.map(demoCsvRow)].join("\n") + "\n";
+}
+
 describe("isDerivedGroup", () => {
 	test("identifies active-no-starlink as derived", () => {
 		expect(isDerivedGroup("active-no-starlink")).toBe(true);
+	});
+
+	test("identifies demo as derived", () => {
+		expect(isDerivedGroup("demo")).toBe(true);
 	});
 
 	test("identifies active as not derived", () => {
@@ -34,6 +56,10 @@ describe("isDerivedGroup", () => {
 describe("getSourceGroup", () => {
 	test("returns 'active' for active-no-starlink", () => {
 		expect(getSourceGroup("active-no-starlink")).toBe("active");
+	});
+
+	test("returns 'active' for demo", () => {
+		expect(getSourceGroup("demo")).toBe("active");
 	});
 
 	test("returns null for non-derived groups", () => {
@@ -132,5 +158,60 @@ describe("getDerivedGroupTimestamp", () => {
 	test("returns null for non-derived groups", async () => {
 		const ts = await getDerivedGroupTimestamp("active");
 		expect(ts).toBeNull();
+	});
+});
+
+describe("demo derived group", () => {
+	beforeEach(async () => {
+		const kv = (await import("../src/utils/kv")).default;
+		await kv.set("active_csv", buildDemoCsv([...demoExpectedIds, 99999]));
+		await kv.set("active_timestamp_csv", Date.now());
+	});
+
+	afterEach(async () => {
+		const kv = (await import("../src/utils/kv")).default;
+		await kv.delete("active_csv");
+		await kv.delete("active_timestamp_csv");
+	});
+
+	test("includes the requested NORAD IDs", async () => {
+		const result = await getDerivedGroupFormat("demo", "csv");
+		const ids = new Set(parseOmmCsv(result).map((rec) => rec.NORAD_CAT_ID));
+
+		for (const id of demoRequestedIds) {
+			expect(ids.has(id)).toBe(true);
+		}
+	});
+
+	test("includes the operational Galileo additions and deduplicates", async () => {
+		const result = await getDerivedGroupFormat("demo", "csv");
+		const ids = new Set(parseOmmCsv(result).map((rec) => rec.NORAD_CAT_ID));
+
+		for (const id of demoGalileoIds) {
+			expect(ids.has(id)).toBe(true);
+		}
+
+		expect(ids.size).toBe(demoExpectedIds.length);
+	});
+
+	test("exposes exactly the allowlisted satellites present in active", async () => {
+		const result = await getDerivedGroupFormat("demo", "json");
+		const ids = (JSON.parse(result) as { NORAD_CAT_ID: number }[]).map((rec) => rec.NORAD_CAT_ID).sort((a, b) => a - b);
+		const expected = [...demoExpectedIds].sort((a, b) => a - b);
+
+		expect(ids).toEqual(expected);
+		expect(ids.includes(99999)).toBe(false);
+	});
+
+	test("only exposes allowlisted satellites that are present in active", async () => {
+		const kv = (await import("../src/utils/kv")).default;
+		await kv.set("active_csv", buildDemoCsv([1361, 40545, 67162]));
+
+		const result = await getDerivedGroupFormat("demo", "csv");
+		const ids = parseOmmCsv(result)
+			.map((rec) => rec.NORAD_CAT_ID)
+			.sort((a, b) => a - b);
+
+		expect(ids).toEqual([1361, 40545, 67162]);
 	});
 });

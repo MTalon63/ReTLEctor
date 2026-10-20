@@ -7,13 +7,15 @@ export function isDerivedGroup(group: string): boolean {
 	return group in config.derivedGroups;
 }
 
+type DerivedGroupDefinition = { source: string; filter: (name: string, noradId?: number) => boolean };
+
 export function getSourceGroup(group: string): string | null {
-	const def = (config.derivedGroups as Record<string, { source: string; filter: (name: string) => boolean }>)[group];
+	const def = (config.derivedGroups as Record<string, DerivedGroupDefinition>)[group];
 	return def ? def.source : null;
 }
 
 export async function getDerivedGroupFormat(group: string, format: "tle" | "json" | "csv" | "kvn"): Promise<string> {
-	const def = (config.derivedGroups as Record<string, { source: string; filter: (name: string) => boolean }>)[group];
+	const def = (config.derivedGroups as Record<string, DerivedGroupDefinition>)[group];
 	if (!def) {
 		throw new Error(`Unknown derived group: ${group}`);
 	}
@@ -26,7 +28,7 @@ export async function getDerivedGroupFormat(group: string, format: "tle" | "json
 	}
 
 	const records = parseOmmCsv(sourceCsv);
-	const filteredCsv = filterRecordsToCsv(records, (rec) => def.filter(rec.OBJECT_NAME));
+	const filteredCsv = filterRecordsToCsv(records, (rec) => def.filter(rec.OBJECT_NAME, rec.NORAD_CAT_ID));
 
 	switch (format) {
 		case "tle":

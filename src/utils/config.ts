@@ -2,11 +2,18 @@ import { version } from "../../package.json";
 
 const contact = process.env.CONTACT_EMAIL || process.env.CONTACT_INFO || process.env.OPERATOR_CONTACT || null;
 
+const demoNoradIds = new Set<number>([
+	1361, 25415, 25982, 25989, 36037, 37846, 37847, 38771, 38857, 40128, 40129, 40544, 40545, 40890, 41174, 41175, 41549, 41550,
+	41859, 41860, 41861, 41862, 43055, 43056, 43057, 43058, 43564, 43565, 43566, 43567, 43689, 47719, 49809, 49810, 59598, 59600,
+	61182, 61183, 62256, 67160, 67162,
+]);
+
 const config = {
 	allowedGroups: Array.from(
 		new Set([
 			"active",
 			"active-no-starlink",
+			"demo",
 			...(process.env.ALLOWED_GROUPS
 				? process.env.ALLOWED_GROUPS.split(",")
 						.map((g) => g.trim())
@@ -24,6 +31,10 @@ const config = {
 		"active-no-starlink": {
 			source: "active",
 			filter: (name: string) => !name.toUpperCase().startsWith("STARLINK"),
+		},
+		demo: {
+			source: "active",
+			filter: (_name: string, noradId?: number) => noradId !== undefined && demoNoradIds.has(noradId),
 		},
 	} as const,
 	formats: ["tle", "json", "csv", "kvn"] as const,
