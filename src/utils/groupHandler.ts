@@ -23,13 +23,15 @@ async function handleGroupRequest(rawGroup: string, lastFetchedHeader: number, f
 			return new Response(`Source group for derived group "${group}" has no cached data.`, { status: 404 });
 		}
 
+		const sourceCacheDuration = getSourceGroup(group) === "active" ? config.cacheActiveDuration : config.cacheDuration;
+
 		if (lastFetchedHeader && !isNaN(lastFetchedHeader) && sourceTimestamp <= lastFetchedHeader) {
 			log.debug(`Derived group "${group}" not modified since last fetch. Returning 304.`);
 			return new Response(null, {
 				status: 304,
 				headers: {
 					"Last-Modified": new Date(sourceTimestamp).toUTCString(),
-					"Cache-Control": `max-age=${Math.ceil((config.cacheDuration - (Date.now() - sourceTimestamp)) / 1000)}`,
+					"Cache-Control": `max-age=${Math.max(0, Math.ceil((sourceCacheDuration - (Date.now() - sourceTimestamp)) / 1000))}`,
 				},
 			});
 		}
@@ -38,7 +40,7 @@ async function handleGroupRequest(rawGroup: string, lastFetchedHeader: number, f
 			const data = await getDerivedGroupFormat(group, format);
 			const contentType = format === "json" ? "application/json" : "text/plain";
 			const age = Date.now() - sourceTimestamp;
-			const maxAge = Math.max(0, Math.ceil((config.cacheDuration - age) / 1000));
+			const maxAge = Math.max(0, Math.ceil((sourceCacheDuration - age) / 1000));
 
 			return new Response(data, {
 				headers: {
@@ -136,7 +138,7 @@ async function handleGroupStatus(rawGroup: string, format: OrbitFormat = "csv") 
 
 		const now = Date.now();
 		const age = Math.floor((now - sourceTimestamp) / 1000);
-		const cacheDuration = config.cacheDuration;
+		const cacheDuration = getSourceGroup(group) === "active" ? config.cacheActiveDuration : config.cacheDuration;
 		const isStale = age > cacheDuration / 1000;
 		const nextUpdate = new Date(sourceTimestamp + cacheDuration).toUTCString();
 

@@ -75,10 +75,10 @@ export const app = new Elysia()
 			const now = Date.now();
 			const activeGroups = await Promise.all(
 				config.allowedGroups.map(async (group) => {
-					const sourceGroup = isDerivedGroup(group) ? getSourceGroup(group) : group;
+					const sourceGroup = (isDerivedGroup(group) ? getSourceGroup(group) : group) ?? group;
 
 					const csvTimestamp = await kv.get(`${sourceGroup}_timestamp_csv`);
-					const status = getTleFreshnessStatus(csvTimestamp as string | number | null, group, now);
+					const status = getTleFreshnessStatus(csvTimestamp as string | number | null, sourceGroup, now);
 					return {
 						name: group,
 						lastUpdate: status.isoDate,

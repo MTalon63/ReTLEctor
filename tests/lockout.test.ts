@@ -21,7 +21,8 @@ describe("Celestrak Lockout", () => {
 
 		const status = await isCelestrakLockedOut();
 		expect(status.locked).toBe(true);
-		expect(status.untilMs).toBe(lockoutUntil);
+		expect(lockoutUntil).not.toBeNull();
+		expect(status.untilMs).toBe(lockoutUntil!);
 		expect(status.untilIso).toBeDefined();
 	});
 

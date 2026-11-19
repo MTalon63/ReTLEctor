@@ -18,8 +18,9 @@ async function validateKvOnBootup(): Promise<void> {
 		const csvKey = `${group}_csv`;
 		const csvTsKey = `${group}_timestamp_csv`;
 		const csvValue = (await kv.get(csvKey)) as string | null;
+		const hasValidCsv = typeof csvValue === "string" && csvValue.length > 0 && !isCorruptTleValue(csvValue);
 
-		if (isCorruptTleValue(csvValue)) {
+		if (!hasValidCsv) {
 			if (csvValue !== null && csvValue !== undefined) {
 				log.warn(
 					`KV entry "${csvKey}" looks corrupt — purging (length=${csvValue?.length ?? 0}, preview="${csvValue?.slice(0, 60).replace(/\n/g, "\\n")}")`,
@@ -28,9 +29,7 @@ async function validateKvOnBootup(): Promise<void> {
 				await kv.delete(csvTsKey);
 				purged++;
 			}
-		}
 
-		if (!csvValue) {
 			for (const format of config.formats) {
 				if (format === "csv") continue;
 				const dataKey = `${group}_${format}`;

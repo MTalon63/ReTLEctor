@@ -1,7 +1,8 @@
 import log from "./logger";
 import kv from "./kv";
 import config from "./config";
-import { isCelestrakLockedOut, triggerCelestrakLockout, formatLockoutDuration } from "./lockout";
+import { coalesce, upstreamFetch } from "./upstream";
+import { isCelestrakLockedOut, triggerCelestrakLockout, clearCelestrakFailures, formatLockoutDuration } from "./lockout";
 import { csvTo3le, csvToJson, csvToKvn, parseOmmCsv } from "./omm";
 
 import type { OrbitFormat } from "./tleGetter";
@@ -12,6 +13,16 @@ export function isNotModifiedNotice(value: string | null | undefined): boolean {
 	return (
 		lower.includes("gp data has not updated") || lower.includes("has not updated since") || lower.includes("data is updated once every")
 	);
+}
+
+export function isNotFoundNotice(value: string | null | undefined): boolean {
+	if (!value) return false;
+
+	const trimmed = value.trim();
+	if (trimmed.startsWith("OBJECT_NAME")) return false;
+
+	const lower = trimmed.toLowerCase();
+	return lower.includes("invalid query") || lower.includes("not found") || lower.includes("no gp data") || lower.includes("no data found");
 }
 
 export function isCorruptTleValue(value: string | null | undefined): boolean {
@@ -35,7 +46,7 @@ export function isCorruptTleValue(value: string | null | undefined): boolean {
 	return false;
 }
 
-async function fetchTle(group: string, format: OrbitFormat = "tle", queryType: string = "GROUP"): Promise<string> {
+async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", queryType: string = "GROUP"): Promise<string> {
 	const upstreamFormat = "csv";
 	const cachedCsv = (await kv.get(`${group}_${upstreamFormat}`)) as string | null;
 
@@ -62,7 +73,17 @@ async function fetchTle(group: string, format: OrbitFormat = "tle", queryType: s
 			headers["If-Modified-Since"] = new Date(lastFetch).toUTCString();
 		}
 
-		const response = await fetch(url, { headers });
+		let response: Response;
+		try {
+			response = await upstreamFetch(url, { headers });
+		} catch (err) {
+			await triggerCelestrakLockout("network", `group "${group}"`);
+			throw err;
+		}
+
+		if (response.ok || response.status === 304) {
+			await clearCelestrakFailures();
+		}
 
 		if (response.status === 304) {
 			log.debug(`Orbital data for group "${group}" not modified (304). Serving cached data.`);
@@ -106,8 +127,16 @@ async function fetchTle(group: string, format: OrbitFormat = "tle", queryType: s
 			);
 		}
 
+		if (isNotFoundNotice(csvData)) {
+			log.warn(`Celestrak rejected the query for group "${group}" — not a valid group name.`);
+			const unknownGroup = new Error(`Group "${group}" is not a valid Celestrak group`);
+			(unknownGroup as any).statusCode = 404;
+			throw unknownGroup;
+		}
+
 		if (isCorruptTleValue(csvData)) {
 			log.warn(`Upstream returned corrupt/error payload for group "${group}".`);
+			await triggerCelestrakLockout("network", `group "${group}" (corrupt payload)`);
 			if (cachedCsv) {
 				log.warn(`Serving stale cached orbital data for group "${group}" due to corrupt payload.`);
 				return deriveFormat(cachedCsv, format);
@@ -119,6 +148,7 @@ async function fetchTle(group: string, format: OrbitFormat = "tle", queryType: s
 			parseOmmCsv(csvData);
 		} catch (e) {
 			log.warn(`Upstream returned unparseable CSV for group "${group}": ${e}`);
+			await triggerCelestrakLockout("network", `group "${group}" (unparseable payload)`);
 			if (cachedCsv) {
 				log.warn(`Serving stale cached orbital data for group "${group}" due to unparseable CSV.`);
 				return deriveFormat(cachedCsv, format);
@@ -178,4 +208,6 @@ function deriveFormat(csvData: string, format: "tle" | "json" | "csv" | "kvn"): 
 	}
 }
 
-export default fetchTle;
+export default function fetchTle(group: string, format: OrbitFormat = "tle", queryType: string = "GROUP"): Promise<string> {
+	return coalesce(`group:${queryType}:${group}`, () => fetchTleUncoalesced(group, format, queryType));
+}

@@ -17,6 +17,7 @@ services:
             - CONTACT_EMAIL=admin@example.com # Operator contact email/info sent in User-Agent header to Celestrak.
             - CELESTRAK_URL=https://celestrak.org/NORAD/elements/gp.php # Upstream Celestrak API URL.
             - CELESTRAK_MAX_DIRECT_REQUESTS=25 # Hourly cap on direct NORAD ID lookups from Celestrak.
+            - DISCORD_WEBHOOK_URL= # Optional Discord webhook for upstream failure/recovery alerts. Leave empty to disable.
             - SITE_URL=https://example.com # Public domain URL of this instance.
             - GITHUB_URL=https://github.com/MrTalon63/ReTLEctor # Repository link shown in footer and header.
             - APP_NAME=ReTLEctor # Application title.

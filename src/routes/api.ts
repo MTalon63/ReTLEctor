@@ -60,10 +60,10 @@ export async function getActiveGroupsData() {
 	return await Promise.all(
 		config.allowedGroups.map(async (group) => {
 			const derived = isDerivedGroup(group);
-			const sourceGroup = derived ? getSourceGroup(group) : group;
+			const sourceGroup = (derived ? getSourceGroup(group) : group) ?? group;
 			const csvTimestamp = (await kv.get(`${sourceGroup}_timestamp_csv`)) as number | null;
-			const status = getTleFreshnessStatus(csvTimestamp, group, now);
-			const cacheDuration = group === "active" ? config.cacheActiveDuration : config.cacheDuration;
+			const status = getTleFreshnessStatus(csvTimestamp, sourceGroup, now);
+			const cacheDuration = sourceGroup === "active" ? config.cacheActiveDuration : config.cacheDuration;
 			const ageSeconds = csvTimestamp ? Math.floor((now - csvTimestamp) / 1000) : null;
 
 			return {

@@ -269,38 +269,26 @@ interface Line2Fields {
 	revAtEpoch: number;
 }
 
+function put(chars: string[], start: number, value: string, width: number): void {
+	const field = value.padEnd(width, " ").slice(0, width);
+	for (let i = 0; i < width; i++) chars[start + i] = field[i]!;
+}
+
 function buildLine1(f: Line1Fields): string {
 	const chars = new Array(68).fill(" ");
 
 	chars[0] = "1";
 
-	const noradPadded = f.noradId.padStart(5, " ");
-	for (let i = 0; i < 5; i++) chars[2 + i] = noradPadded[i];
-
+	put(chars, 2, f.noradId.padStart(5, " "), 5);
 	chars[7] = f.classification;
-
-	const intDesigPadded = f.intDesig.padEnd(8);
-	for (let i = 0; i < 8; i++) chars[9 + i] = intDesigPadded[i];
-
-	chars[18] = f.epochYear[0];
-	chars[19] = f.epochYear[1];
-
-	const epochDayPadded = f.epochDay.padStart(12, "0");
-	for (let i = 0; i < 12; i++) chars[20 + i] = epochDayPadded[i];
-
-	const firstDeriv = formatFirstDerivative(f.meanMotionDot);
-	for (let i = 0; i < 10; i++) chars[33 + i] = firstDeriv[i];
-
-	const secondDeriv = formatSecondDerivative(f.meanMotionDdot);
-	for (let i = 0; i < 8; i++) chars[44 + i] = secondDeriv[i];
-
-	const bstar = formatBstar(f.bstar);
-	for (let i = 0; i < 8; i++) chars[53 + i] = bstar[i];
-
-	chars[62] = String(f.ephemerisType);
-
-	const elemSet = String(f.elementSetNo).padStart(4, " ");
-	for (let i = 0; i < 4; i++) chars[64 + i] = elemSet[i];
+	put(chars, 9, f.intDesig.padEnd(8, " "), 8);
+	put(chars, 18, f.epochYear, 2);
+	put(chars, 20, f.epochDay.padStart(12, "0"), 12);
+	put(chars, 33, formatFirstDerivative(f.meanMotionDot), 10);
+	put(chars, 44, formatSecondDerivative(f.meanMotionDdot), 8);
+	put(chars, 53, formatBstar(f.bstar), 8);
+	put(chars, 62, String(f.ephemerisType), 1);
+	put(chars, 64, String(f.elementSetNo).padStart(4, " "), 4);
 
 	const lineWithoutChecksum = chars.join("");
 	const checksum = computeChecksum(lineWithoutChecksum);
@@ -312,29 +300,14 @@ function buildLine2(f: Line2Fields): string {
 
 	chars[0] = "2";
 
-	const noradPadded = f.noradId.padStart(5, " ");
-	for (let i = 0; i < 5; i++) chars[2 + i] = noradPadded[i];
-
-	const incl = formatAngle(f.inclination);
-	for (let i = 0; i < 8; i++) chars[8 + i] = incl[i];
-
-	const raan = formatAngle(f.raan);
-	for (let i = 0; i < 8; i++) chars[17 + i] = raan[i];
-
-	const ecc = formatEccentricity(f.eccentricity);
-	for (let i = 0; i < 7; i++) chars[26 + i] = ecc[i];
-
-	const argP = formatAngle(f.argOfPerigee);
-	for (let i = 0; i < 8; i++) chars[34 + i] = argP[i];
-
-	const meanAnom = formatAngle(f.meanAnomaly);
-	for (let i = 0; i < 8; i++) chars[43 + i] = meanAnom[i];
-
-	const meanMot = formatMeanMotion(f.meanMotion);
-	for (let i = 0; i < 11; i++) chars[52 + i] = meanMot[i];
-
-	const rev = String(f.revAtEpoch).padStart(5, "0");
-	for (let i = 0; i < 5; i++) chars[63 + i] = rev[i];
+	put(chars, 2, f.noradId.padStart(5, " "), 5);
+	put(chars, 8, formatAngle(f.inclination), 8);
+	put(chars, 17, formatAngle(f.raan), 8);
+	put(chars, 26, formatEccentricity(f.eccentricity), 7);
+	put(chars, 34, formatAngle(f.argOfPerigee), 8);
+	put(chars, 43, formatAngle(f.meanAnomaly), 8);
+	put(chars, 52, formatMeanMotion(f.meanMotion), 11);
+	put(chars, 63, String(f.revAtEpoch).padStart(5, "0"), 5);
 
 	const lineWithoutChecksum = chars.join("");
 	const checksum = computeChecksum(lineWithoutChecksum);
@@ -355,27 +328,30 @@ export function computeChecksum(line: string): number {
 }
 
 function formatFirstDerivative(value: number): string {
-	const sign = value > 0 ? " " : value < 0 ? "-" : " ";
-	const absVal = Math.abs(value);
+	if (!Number.isFinite(value) || value === 0) return " .00000000";
 
-	const digits = absVal.toFixed(8).slice(2);
+	const sign = value < 0 ? "-" : " ";
+	const digits = Math.abs(value) >= 1 ? "99999999" : Math.abs(value).toFixed(8).slice(2);
 	return sign + "." + digits;
 }
 
+// TLE scientific notation: ±NNNNN±E, implied leading decimal point.
 function formatSecondDerivative(value: number): string {
-	if (value === 0) {
-		return " 00000+0";
+	if (!Number.isFinite(value) || value === 0) return " 00000+0";
+
+	const sign = value < 0 ? "-" : " ";
+	let exp = Math.floor(Math.log10(Math.abs(value))) + 1;
+	let digits = Math.round((Math.abs(value) / Math.pow(10, exp)) * 100000);
+
+	if (digits >= 100000) {
+		digits = Math.round(digits / 10);
+		exp += 1;
 	}
 
-	const absVal = Math.abs(value);
+	if (exp > 9) return sign + "99999+9";
+	if (exp < -9) return sign + "00000-9";
 
-	const exp = Math.floor(Math.log10(absVal)) + 1;
-	const mantissa = absVal / Math.pow(10, exp);
-	const digits = Math.round(mantissa * 100000);
-
-	const expStr = exp >= 0 ? `+${exp}` : `-${Math.abs(exp)}`;
-
-	return " " + String(digits).padStart(5, "0") + expStr;
+	return sign + String(digits).padStart(5, "0") + (exp < 0 ? `-${Math.abs(exp)}` : `+${exp}`);
 }
 
 function formatBstar(value: number): string {
@@ -383,14 +359,17 @@ function formatBstar(value: number): string {
 }
 
 function formatAngle(value: number): string {
-	return value.toFixed(4).padStart(8, " ");
+	if (!Number.isFinite(value)) return "  0.0000";
+	return Math.abs(value).toFixed(4).padStart(8, " ");
 }
 
 function formatEccentricity(value: number): string {
-	return String(Math.round(value * 10000000)).padStart(7, "0");
+	if (!Number.isFinite(value)) return "0000000";
+	return String(Math.min(9999999, Math.max(0, Math.round(value * 10000000)))).padStart(7, "0");
 }
 
 function formatMeanMotion(value: number): string {
+	if (!Number.isFinite(value)) return " 0.00000000";
 	return value.toFixed(8).padStart(11, " ");
 }
 
@@ -398,7 +377,7 @@ export function parse3le(tleText: string): OmmRecord[] {
 	const lines = tleText.trim().split(/\r?\n/);
 	const records: OmmRecord[] = [];
 
-	const is3le = lines.length >= 3 && (lines[0] ?? "").match(/^[A-Z0-9]/);
+	const is3le = lines.length >= 3 && /^1 /.test(lines[1] ?? "");
 
 	if (is3le) {
 		for (let i = 0; i + 2 < lines.length; i += 3) {
@@ -497,19 +476,19 @@ function parseTleNumber(str: string): number {
 }
 
 function parseTleScientific(str: string): number {
-	if (!str || str === "00000-0") return 0;
+	if (!str) return 0;
 
-	const match = str.match(/^(\d{5})([+-])(\d{2})$/);
-	if (!match) {
-		const num = parseFloat(str);
-		return isNaN(num) ? 0 : num;
+	const match = str.match(/^([+-]?)(\d{5})([+-])(\d)$/);
+	if (match) {
+		const mantissa = parseInt(match[2] ?? "0", 10) / 100000;
+		const sign = match[1] === "-" ? -1 : 1;
+		const exp = parseInt(match[4] ?? "0", 10) * (match[3] === "-" ? -1 : 1);
+
+		return sign * mantissa * Math.pow(10, exp);
 	}
 
-	const mantissa = parseInt(match[1] ?? "0", 10) / 100000;
-	const sign = match[2] === "-" ? -1 : 1;
-	const exp = parseInt(match[3] ?? "0", 10);
-
-	return sign * mantissa * Math.pow(10, exp);
+	const num = parseFloat(str.replace(/([+-])(\d+)$/, "e$1$2"));
+	return isNaN(num) ? 0 : num;
 }
 
 export function csvToTle(csvText: string): string {

@@ -53,6 +53,10 @@ async function checkAndUpdateTles(): Promise<void> {
 			await fetchTle(group, "csv", queryType);
 		} catch (err) {
 			log.error(`Background cron failed to update group "${group}": ${err}`);
+			if ((await isCelestrakLockedOut()).locked) {
+				log.warn(`Stopping this update pass early — Celestrak lockout is in effect.`);
+				return;
+			}
 		}
 
 		const interFetchDelay = 3000 + Math.floor(Math.random() * 5000);

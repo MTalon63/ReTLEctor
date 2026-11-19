@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isCorruptTleValue, isNotModifiedNotice } from "../src/utils/tleFetcher";
+import { isCorruptTleValue, isNotFoundNotice, isNotModifiedNotice } from "../src/utils/tleFetcher";
 
 describe("tleFetcher validation helpers", () => {
 	const celestrakNoticeMessage = `GP data has not updated since your last successful
@@ -32,5 +32,16 @@ Data is updated once every 2 hours.`;
 		const validCsv = `OBJECT_NAME,OBJECT_ID,EPOCH,MEAN_MOTION,ECCENTRICITY,INCLINATION,RA_OF_ASC_NODE,ARG_OF_PERICENTER,MEAN_ANOMALY,EPHEMERIS_TYPE,CLASSIFICATION_TYPE,NORAD_CAT_ID,ELEMENT_SET_NO,REV_AT_EPOCH,BSTAR,MEAN_MOTION_DOT,MEAN_MOTION_DDOT
 ISS (ZARYA),1998-067A,2026-08-06T01:17:37.872384,15.49359774,0.00072161,51.6321,53.3065,17.1615,342.9616,0,U,25544,999,57948,0.00007969016,0.00003997,0`;
 		expect(isCorruptTleValue(validCsv)).toBe(false);
+	});
+
+	test("isNotFoundNotice catches Celestrak's unknown-group reply (served as HTTP 200)", () => {
+		expect(isNotFoundNotice(`Invalid query: "GROUP=noaa&FORMAT=csv" (GROUP=noaa not found)`)).toBe(true);
+		expect(isNotFoundNotice("No GP data found")).toBe(true);
+		expect(isNotFoundNotice("ISS (ZARYA)\n1 25544U...")).toBe(false);
+		expect(
+			isNotFoundNotice(
+				"OBJECT_NAME,OBJECT_ID,EPOCH,MEAN_MOTION\nNOT FOUND ROCK,1998-067A,2026-08-06T01:17:37,15.49359774",
+			),
+		).toBe(false);
 	});
 });

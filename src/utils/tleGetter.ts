@@ -1,8 +1,9 @@
 import kv from "./kv";
 import log from "./logger";
 import config from "./config";
-import fetchTle, { isCorruptTleValue, isNotModifiedNotice } from "./tleFetcher";
-import { isCelestrakLockedOut, triggerCelestrakLockout, formatLockoutDuration } from "./lockout";
+import fetchTle, { isCorruptTleValue, isNotModifiedNotice, isNotFoundNotice } from "./tleFetcher";
+import { coalesce, serialize, upstreamFetch } from "./upstream";
+import { isCelestrakLockedOut, triggerCelestrakLockout, clearCelestrakFailures, formatLockoutDuration, noteNoradNotFound } from "./lockout";
 import { decode as decodeAlpha5 } from "./alpha5";
 import { parseOmmCsv, csvTo3le, csvToJson, csvToKvn, recordsToCsv, type OmmRecord } from "./omm";
 
@@ -29,7 +30,33 @@ export interface NoradResult {
 	timestamp: number;
 }
 
-export async function getNoradCsv(noradId: number): Promise<{ csv: string; record?: OmmRecord; timestamp: number }> {
+const DIRECT_WINDOW_MS = 60 * 60 * 1000;
+
+// Under the lock, or concurrent misses all read the same counter and bypass the cap.
+async function reserveDirectRequest(): Promise<boolean> {
+	return serialize(async () => {
+		const now = Date.now();
+		let windowStart = (await kv.get(`celestrakWindowStart`)) as number | null;
+		let tries = ((await kv.get(`celestrakTries`)) as number | null) || 0;
+
+		if (!windowStart || now - windowStart >= DIRECT_WINDOW_MS) {
+			windowStart = now;
+			tries = 0;
+		}
+
+		if (tries >= config.celestrakMaxDirectRequests) return false;
+
+		await kv.set(`celestrakTries`, tries + 1);
+		await kv.set(`celestrakWindowStart`, windowStart);
+		return true;
+	});
+}
+
+export function getNoradCsv(noradId: number): Promise<{ csv: string; record?: OmmRecord; timestamp: number }> {
+	return coalesce(`norad:${noradId}`, () => getNoradCsvUncoalesced(noradId));
+}
+
+async function getNoradCsvUncoalesced(noradId: number): Promise<{ csv: string; record?: OmmRecord; timestamp: number }> {
 	let cachedCsv = (await kv.get(`norad_${noradId}_csv`)) as string | null;
 	let timestamp: number | undefined = await kv.get(`norad_${noradId}_timestamp`);
 	const now = Date.now();
@@ -80,32 +107,31 @@ export async function getNoradCsv(noradId: number): Promise<{ csv: string; recor
 	const url = `${config.celestrakUrl}?CATNR=${noradId}&FORMAT=csv`;
 
 	try {
-		let tries: number = (await kv.get(`celestrakTries`)) || 0;
-		let windowStart: number | undefined = await kv.get(`celestrakWindowStart`);
-
-		if (!windowStart || now - windowStart >= 60 * 60 * 1000) {
-			tries = 0;
-			windowStart = now;
-			await kv.set(`celestrakTries`, 0);
-			await kv.set(`celestrakWindowStart`, now);
-		}
-
-		if (tries >= config.celestrakMaxDirectRequests) {
+		if (!(await reserveDirectRequest())) {
 			log.warn(`Celestrak rate limit reached. Falling back to stale cache for NORAD ID ${noradId}.`);
 			if (cachedDirectData) return { csv: cachedDirectData, timestamp: directTimestamp };
 			throw new Error("Rate limit exceeded for Celestrak fetches");
 		}
 
-		const response = await fetch(url, {
-			headers: {
-				"User-Agent": config.userAgent,
-			},
-		});
+		let response: Response;
+		try {
+			response = await upstreamFetch(url, {
+				headers: {
+					"User-Agent": config.userAgent,
+				},
+			});
+		} catch (err) {
+			await triggerCelestrakLockout("network", `NORAD ID ${noradId}`);
+			throw err;
+		}
 
-		await kv.set(`celestrakTries`, tries + 1);
+		if (response.ok || response.status === 304) {
+			await clearCelestrakFailures();
+		}
 
 		if (response.status === 404) {
 			log.info(`Celestrak returned 404 for NORAD ID ${noradId}.`);
+			await noteNoradNotFound(`NORAD ID ${noradId}`);
 			const err = new Error(`No orbital data found for NORAD ID ${noradId}`);
 			(err as any).statusCode = 404;
 			throw err;
@@ -130,14 +156,24 @@ export async function getNoradCsv(noradId: number): Promise<{ csv: string; recor
 			throw new Error(`Failed to fetch GP data from Celestrak: ${response.status} ${response.statusText}`);
 		}
 
+		if (isNotFoundNotice(fetched)) {
+			log.info(`Celestrak rejected the query for NORAD ID ${noradId} — no such object.`);
+			await noteNoradNotFound(`NORAD ID ${noradId} (invalid query)`);
+			const err = new Error(`No orbital data found for NORAD ID ${noradId}`);
+			(err as any).statusCode = 404;
+			throw err;
+		}
+
 		if (isCorruptTleValue(fetched)) {
 			if (fetched.toLowerCase().includes("no gp data") || fetched.toLowerCase().includes("no data")) {
 				log.info(`Celestrak reported no data for NORAD ID ${noradId}.`);
+				await noteNoradNotFound(`NORAD ID ${noradId} (no data)`);
 				const err = new Error(`No orbital data found for NORAD ID ${noradId}`);
 				(err as any).statusCode = 404;
 				throw err;
 			}
 			log.warn(`Upstream returned corrupt/error payload for NORAD ID ${noradId}.`);
+			await triggerCelestrakLockout("network", `NORAD ID ${noradId} (corrupt payload)`);
 			if (cachedDirectData) return { csv: cachedDirectData, timestamp: directTimestamp };
 			throw new Error(`Upstream returned corrupt GP payload for NORAD ID ${noradId}`);
 		}

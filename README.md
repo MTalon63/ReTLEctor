@@ -7,6 +7,8 @@ Very simple web app to cache and return orbital data from Celestrak, so you can 
 ### Features
 
 - Customizable ratelimiting and caching duration with environment variables
+- Backs off (with escalating delays) when Celestrak returns errors or stops answering
+- Optional Discord webhook alerts on upstream failures and recovery (`DISCORD_WEBHOOK_URL`)
 - Dockerized for easy deployment
 - Light on resources
 
