@@ -1,5 +1,6 @@
 import config from "./config";
 import log from "./logger";
+import { type FailureKind } from "./lockout";
 import { version } from "../../package.json";
 
 const COLOR_BLOCKED = 0xed4245;
@@ -22,15 +23,18 @@ function throttled(key: string): boolean {
 	return false;
 }
 
-function colorFor(status: number | "network"): number {
+function colorFor(status: FailureKind): number {
 	if (status === "network") return COLOR_BLOCKED;
+	if (status === "not-found") return COLOR_CLIENT;
 	if (status === 403 || status === 429) return COLOR_BLOCKED;
 	if (status >= 500) return COLOR_SERVER;
 	return COLOR_CLIENT;
 }
 
-function labelFor(status: number | "network"): string {
-	return status === "network" ? "No response (timeout / connection refused)" : `HTTP ${status}`;
+function labelFor(status: FailureKind): string {
+	if (status === "network") return "No response (timeout / connection refused)";
+	if (status === "not-found") return "Clients replaying dead catalog IDs (repeated 404s)";
+	return `HTTP ${status}`;
 }
 
 async function post(payload: unknown): Promise<void> {
@@ -53,7 +57,7 @@ async function post(payload: unknown): Promise<void> {
 }
 
 export interface UpstreamFailureAlert {
-	status: number | "network";
+	status: FailureKind;
 	context: string;
 	streak: number;
 	durationMs: number;
@@ -62,7 +66,7 @@ export interface UpstreamFailureAlert {
 
 export async function notifyUpstreamFailure(alert: UpstreamFailureAlert): Promise<void> {
 	if (!config.discordWebhookUrl) return;
-	if (throttled(`${alert.status}|${alert.context}`)) {
+	if (throttled(String(alert.status))) {
 		log.debug(`Upstream alert for ${alert.context} suppressed by throttle.`);
 		return;
 	}

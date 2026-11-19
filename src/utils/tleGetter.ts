@@ -3,7 +3,7 @@ import log from "./logger";
 import config from "./config";
 import fetchTle, { isCorruptTleValue, isNotModifiedNotice, isNotFoundNotice } from "./tleFetcher";
 import { coalesce, serialize, upstreamFetch } from "./upstream";
-import { isCelestrakLockedOut, triggerCelestrakLockout, clearCelestrakFailures, formatLockoutDuration, noteNoradNotFound } from "./lockout";
+import { isCelestrakLockedOut, triggerCelestrakLockout, clearCelestrakFailures, formatRemainingLockout, noteNoradNotFound } from "./lockout";
 import { decode as decodeAlpha5 } from "./alpha5";
 import { parseOmmCsv, csvTo3le, csvToJson, csvToKvn, recordsToCsv, type OmmRecord } from "./omm";
 
@@ -97,10 +97,10 @@ async function getNoradCsvUncoalesced(noradId: number): Promise<{ csv: string; r
 	const lockout = await isCelestrakLockedOut();
 	if (lockout.locked) {
 		log.warn(
-			`Celestrak is in ${formatLockoutDuration()} lockout (until ${lockout.untilIso}). Skipping direct fetch for NORAD ID ${noradId}.`,
+			`Celestrak is in ${formatRemainingLockout(lockout)} lockout (until ${lockout.untilIso}). Skipping direct fetch for NORAD ID ${noradId}.`,
 		);
 		if (cachedDirectData) return { csv: cachedDirectData, timestamp: directTimestamp };
-		throw new Error(`Celestrak is currently in ${formatLockoutDuration()} lockout until ${lockout.untilIso}`);
+		throw new Error(`Celestrak is currently in ${formatRemainingLockout(lockout)} lockout until ${lockout.untilIso}`);
 	}
 
 	log.debug(`NORAD ID ${noradId} not found in active group. Attempting to fetch directly from Celestrak...`);

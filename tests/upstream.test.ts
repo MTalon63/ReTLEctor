@@ -5,6 +5,7 @@ import { coalesce, serialize, upstreamFetch, resetUpstreamState } from "../src/u
 import {
 	FAILURE_STREAK_KEY,
 	LOCKOUT_KEY,
+	NOT_FOUND_STREAK_KEY,
 	clearCelestrakFailures,
 	getFailureStreak,
 	isCelestrakLockedOut,
@@ -15,6 +16,7 @@ import {
 afterEach(async () => {
 	resetUpstreamState();
 	await kv.delete(LOCKOUT_KEY);
+	await kv.delete(NOT_FOUND_STREAK_KEY);
 	await clearCelestrakFailures();
 });
 
@@ -153,7 +155,7 @@ describe("consecutive 404s", () => {
 		const originalLimit = config.maxConsecutiveNotFound;
 		config.maxConsecutiveNotFound = 3;
 		await kv.delete(LOCKOUT_KEY);
-		await clearCelestrakFailures();
+		await kv.delete(NOT_FOUND_STREAK_KEY);
 
 		try {
 			await noteNoradNotFound("NORAD ID 1");
@@ -164,6 +166,27 @@ describe("consecutive 404s", () => {
 
 			await noteNoradNotFound("NORAD ID 3");
 			expect((await isCelestrakLockedOut()).locked).toBe(true);
+		} finally {
+			config.maxConsecutiveNotFound = originalLimit;
+		}
+	});
+
+	test("a second storm inside the window backs off further", async () => {
+		const originalLimit = config.maxConsecutiveNotFound;
+		config.maxConsecutiveNotFound = 2;
+		await kv.delete(LOCKOUT_KEY);
+		await kv.delete(NOT_FOUND_STREAK_KEY);
+
+		try {
+			await noteNoradNotFound("NORAD ID 1");
+			await noteNoradNotFound("NORAD ID 2");
+			const firstUntil = (await isCelestrakLockedOut()).untilMs!;
+
+			await noteNoradNotFound("NORAD ID 3");
+			await noteNoradNotFound("NORAD ID 4");
+			const secondUntil = (await isCelestrakLockedOut()).untilMs!;
+
+			expect(secondUntil - firstUntil).toBeGreaterThan(9 * 60 * 1000);
 		} finally {
 			config.maxConsecutiveNotFound = originalLimit;
 		}

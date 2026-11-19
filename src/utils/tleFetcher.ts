@@ -2,7 +2,7 @@ import log from "./logger";
 import kv from "./kv";
 import config from "./config";
 import { coalesce, upstreamFetch } from "./upstream";
-import { isCelestrakLockedOut, triggerCelestrakLockout, clearCelestrakFailures, formatLockoutDuration } from "./lockout";
+import { isCelestrakLockedOut, triggerCelestrakLockout, clearCelestrakFailures, formatRemainingLockout } from "./lockout";
 import { csvTo3le, csvToJson, csvToKvn, parseOmmCsv } from "./omm";
 
 import type { OrbitFormat } from "./tleGetter";
@@ -53,12 +53,12 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 	const lockout = await isCelestrakLockedOut();
 	if (lockout.locked) {
 		log.warn(
-			`Celestrak is currently in ${formatLockoutDuration()} lockout (until ${lockout.untilIso}). Skipping HTTP fetch for group "${group}".`,
+			`Celestrak is currently in ${formatRemainingLockout(lockout)} lockout (until ${lockout.untilIso}). Skipping HTTP fetch for group "${group}".`,
 		);
 		if (cachedCsv) {
 			return deriveFormat(cachedCsv, format);
 		}
-		throw new Error(`Celestrak is currently in ${formatLockoutDuration()} lockout until ${lockout.untilIso}`);
+		throw new Error(`Celestrak is currently in ${formatRemainingLockout(lockout)} lockout until ${lockout.untilIso}`);
 	}
 
 	const url = `${config.celestrakUrl}?${queryType}=${group}&FORMAT=${upstreamFormat}`;
@@ -117,13 +117,13 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 		}
 
 		if (!response.ok) {
-			await triggerCelestrakLockout(response.status, `group "${group}"`);
+			const lockoutUntil = await triggerCelestrakLockout(response.status, `group "${group}"`);
 			if (cachedCsv) {
 				log.warn(`Serving stale cached orbital data for group "${group}" due to non-200 response (${response.status}).`);
 				return deriveFormat(cachedCsv, format);
 			}
 			throw new Error(
-				`Failed to fetch orbital data: ${response.status} ${response.statusText} (${formatLockoutDuration()} lockout engaged)`,
+				`Failed to fetch orbital data: ${response.status} ${response.statusText} (lockout engaged until ${lockoutUntil ? new Date(lockoutUntil).toISOString() : "n/a"})`,
 			);
 		}
 

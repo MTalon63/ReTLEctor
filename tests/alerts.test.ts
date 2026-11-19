@@ -80,6 +80,23 @@ describe("discord alerts", () => {
 		expect(sent[0]!.body.embeds![0]!.title).toContain("No response");
 	});
 
+	test("the 404-storm guard is labelled as a client problem, not an outage", async () => {
+		stubFetch();
+
+		await notifyUpstreamFailure({
+			status: "not-found",
+			context: "NORAD ID 40926 (10 consecutive 404s)",
+			streak: 1,
+			durationMs: 5 * 60 * 1000,
+			untilIso: "2026-11-19T20:49:38.000Z",
+		});
+
+		const embed = sent[0]!.body.embeds![0]!;
+		expect(embed.title).toContain("repeated 404s");
+		expect(embed.title).not.toContain("No response");
+		expect(embed.color).toBe(0xfaa61a);
+	});
+
 	test("repeats of the same failure are throttled, a different one is not", async () => {
 		stubFetch();
 
