@@ -109,13 +109,10 @@ function toRecord(raw: Record<string, string>): OmmRecord {
 }
 
 // They keep serving the last element set of dropped objects; a stale epoch means no current data.
-function isTooOld(record: OmmRecord): boolean {
-	if (config.spacetrackMaxAgeDays <= 0) return false;
-
+function epochAgeDays(record: OmmRecord): number | undefined {
 	const epoch = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(record.EPOCH) ? record.EPOCH : `${record.EPOCH}Z`);
-	if (!Number.isFinite(epoch)) return false;
 
-	return Date.now() - epoch > config.spacetrackMaxAgeDays * 24 * 60 * 60 * 1000;
+	return Number.isFinite(epoch) ? (Date.now() - epoch) / 86_400_000 : undefined;
 }
 
 export function spaceTrackEnabled(): boolean {
@@ -135,8 +132,11 @@ export async function fetchGpByNoradId(noradId: number): Promise<OmmRecord | nul
 		if (!Array.isArray(payload) || payload.length === 0) return null;
 
 		const record = toRecord(payload[0]!);
-		if (isTooOld(record)) {
-			log.debug(`Space-Track GP for NORAD ID ${noradId} is stale (epoch ${record.EPOCH}); ignoring.`);
+		const ageDays = epochAgeDays(record);
+		if (ageDays !== undefined && config.spacetrackMaxAgeDays > 0 && ageDays > config.spacetrackMaxAgeDays) {
+			log.info(
+				`Space-Track GP for NORAD ID ${noradId} (${record.OBJECT_NAME}) is ${ageDays.toFixed(0)} days old (epoch ${record.EPOCH}); treating as no data.`,
+			);
 			return null;
 		}
 
