@@ -5,11 +5,14 @@ import { notifyUpstreamFailure, notifyUpstreamRecovered } from "./alerts";
 
 export const LOCKOUT_KEY = "celestrak_lockout_until";
 export const FAILURE_STREAK_KEY = "celestrak_failure_streak";
+const SERVER_STREAK_KEY = "celestrak_server_error_streak";
+const NETWORK_STREAK_KEY = "celestrak_network_streak";
 export const NOT_FOUND_STREAK_KEY = "celestrak_404_streak";
 
 export type FailureKind = number | "network" | "not-found";
 
 const NETWORK_BACKOFF_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000, 6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000];
+const SERVER_ERROR_BACKOFF_MS = [15 * 60 * 1000, 30 * 60 * 1000, 60 * 60 * 1000, 2 * 60 * 60 * 1000];
 
 export function formatLockoutDuration(ms: number = config.celestrakLockDuration): string {
 	const totalMinutes = Math.round(ms / (60 * 1000));
@@ -51,6 +54,9 @@ export async function getFailureStreak(): Promise<number> {
 export async function clearCelestrakFailures(): Promise<void> {
 	const streak = ((await kv.get(FAILURE_STREAK_KEY)) as number | null) || 0;
 
+	await kv.delete(SERVER_STREAK_KEY);
+	await kv.delete(NETWORK_STREAK_KEY);
+
 	if (streak) {
 		await kv.delete(FAILURE_STREAK_KEY);
 		void notifyUpstreamRecovered(streak);
@@ -61,9 +67,7 @@ type NotFoundState = { count: number; trips: number; windowStart: number };
 
 const NOT_FOUND_WINDOW_MS = 60 * 60 * 1000;
 
-// A single 404 is a deorbited object; a run of them is a client replaying a dead catalog.
-// Counted over a window (not reset by interleaved successes) so the guard can't be dodged,
-// and each storm inside the window backs off further.
+// A run of 404s is a client replaying a dead catalog; counted in a window so successes can't reset it.
 export async function noteNoradNotFound(context: string): Promise<void> {
 	const now = Date.now();
 	const stored = (await kv.get(NOT_FOUND_STREAK_KEY)) as NotFoundState | null;
@@ -100,9 +104,19 @@ export async function noteNoradNotFound(context: string): Promise<void> {
 	void notifyUpstreamFailure({ status: "not-found", context, streak: state.trips, durationMs: duration, untilIso: isoStr });
 }
 
+// Per-class ladders: a transient 500 must not inherit a block-sized pause.
+function streakKeyFor(status: FailureKind): string {
+	if (status === "network") return NETWORK_STREAK_KEY;
+	if (status !== "not-found" && status >= 500) return SERVER_STREAK_KEY;
+	return FAILURE_STREAK_KEY;
+}
+
 function lockoutDurationFor(status: FailureKind, streak: number): number {
 	if (status === "network" || status === "not-found") {
 		return NETWORK_BACKOFF_MS[Math.min(streak, NETWORK_BACKOFF_MS.length) - 1]!;
+	}
+	if (status >= 500) {
+		return SERVER_ERROR_BACKOFF_MS[Math.min(streak, SERVER_ERROR_BACKOFF_MS.length) - 1]!;
 	}
 	return Math.min(config.celestrakLockDuration * 2 ** (streak - 1), config.maxFailureBackoffMs);
 }
@@ -113,8 +127,9 @@ export async function triggerCelestrakLockout(status: FailureKind, context: stri
 		return null;
 	}
 
-	const streak = (await getFailureStreak()) + 1;
-	await kv.set(FAILURE_STREAK_KEY, streak);
+	const streakKey = streakKeyFor(status);
+	const streak = (((await kv.get(streakKey)) as number | null) || 0) + 1;
+	await kv.set(streakKey, streak);
 
 	const duration = lockoutDurationFor(status, streak);
 	const lockoutUntil = Date.now() + duration;

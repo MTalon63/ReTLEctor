@@ -127,7 +127,17 @@ describe("failure backoff", () => {
 
 		expect(first - Date.now()).toBeLessThanOrEqual(5 * 60 * 1000 + 1000);
 		expect(second - first).toBeGreaterThan(5 * 60 * 1000);
-		expect(await getFailureStreak()).toBe(2);
+	});
+
+	test("a 5xx pause stays short and does not inherit the block ladder", async () => {
+		await kv.delete(LOCKOUT_KEY);
+		await clearCelestrakFailures();
+
+		const blocked = (await triggerCelestrakLockout(403, "test"))!;
+		const serverError = (await triggerCelestrakLockout(503, "test"))!;
+
+		expect(blocked - Date.now()).toBeGreaterThan(11 * 60 * 60 * 1000);
+		expect(serverError - Date.now()).toBeLessThanOrEqual(15 * 60 * 1000 + 1000);
 	});
 
 	test("repeated HTTP blocks escalate past the base lockout duration", async () => {

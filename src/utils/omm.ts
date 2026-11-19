@@ -335,7 +335,6 @@ function formatFirstDerivative(value: number): string {
 	return sign + "." + digits;
 }
 
-// TLE scientific notation: ±NNNNN±E, implied leading decimal point.
 function formatSecondDerivative(value: number): string {
 	if (!Number.isFinite(value) || value === 0) return " 00000+0";
 

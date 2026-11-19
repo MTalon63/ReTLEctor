@@ -13,7 +13,6 @@ export function coalesce<T>(key: string, fn: () => Promise<T>): Promise<T> {
 	return promise;
 }
 
-// Read-modify-write sections on the KV counters.
 let criticalChain: Promise<unknown> = Promise.resolve();
 
 export function serialize<T>(fn: () => Promise<T>): Promise<T> {
