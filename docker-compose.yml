@@ -4,8 +4,9 @@ services:
         ports:
             - 3000:3000
         environment:
-            - ALLOWED_GROUPS=visual # Those are groups of TLEs you can get from Celestrak at https://celestrak.org/NORAD/elements/ active group is always included
-            - SPECIAL_GROUPS=gpz,gpz-plus,decaying # Custom list of special Celestrak query groups
+            - ALLOWED_GROUPS=visual # Extra Celestrak groups to serve; "active" is always included. See https://celestrak.org/NORAD/elements/
+            - SPECIAL_GROUPS=gpz,gpz-plus,decaying # Fetched with SPECIAL= instead of GROUP=; listing a group here also enables it
+            - WARM_ON_START=1 # Fetch every configured group once at startup instead of waiting for a request.
             - CACHE_DURATION=86400 # Specifies for how long to cache standard TLEs in seconds.
             - CACHE_ACTIVE_DURATION=7200 # Specifies for how long to cache active group TLEs in seconds. (Active group is used for per NORAD ID requests)
             - CACHE_NORAD_DURATION=86400 # Specifies per-NORAD ID cache duration in seconds.
@@ -16,7 +17,8 @@ services:
             - PORT=3000 # Port to run the server on.
             - CONTACT_EMAIL=admin@example.com # Operator contact email/info sent in User-Agent header to Celestrak.
             - CELESTRAK_URL=https://celestrak.org/NORAD/elements/gp.php # Upstream Celestrak API URL.
-            - CELESTRAK_MAX_DIRECT_REQUESTS=25 # Hourly cap on direct NORAD ID lookups from Celestrak.
+            - SPACETRACK_USER= # Space-Track.org account used for per-NORAD-ID lookups (never Celestrak).
+            - SPACETRACK_PASS=
             - DISCORD_WEBHOOK_URL= # Optional Discord webhook for upstream failure/recovery alerts. Leave empty to disable.
             - SITE_URL=https://example.com # Public domain URL of this instance.
             - GITHUB_URL=https://github.com/MrTalon63/ReTLEctor # Repository link shown in footer and header.

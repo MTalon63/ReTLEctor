@@ -5,18 +5,15 @@ import { coalesce, serialize, upstreamFetch, resetUpstreamState } from "../src/u
 import {
 	FAILURE_STREAK_KEY,
 	LOCKOUT_KEY,
-	NOT_FOUND_STREAK_KEY,
 	clearCelestrakFailures,
 	getFailureStreak,
 	isCelestrakLockedOut,
-	noteNoradNotFound,
 	triggerCelestrakLockout,
 } from "../src/utils/lockout";
 
 afterEach(async () => {
 	resetUpstreamState();
 	await kv.delete(LOCKOUT_KEY);
-	await kv.delete(NOT_FOUND_STREAK_KEY);
 	await clearCelestrakFailures();
 });
 
@@ -157,48 +154,5 @@ describe("failure backoff", () => {
 
 		await clearCelestrakFailures();
 		expect(await kv.get(FAILURE_STREAK_KEY)).toBeFalsy();
-	});
-});
-
-describe("consecutive 404s", () => {
-	test("a run of unknowns trips the lockout, one alone does not", async () => {
-		const originalLimit = config.maxConsecutiveNotFound;
-		config.maxConsecutiveNotFound = 3;
-		await kv.delete(LOCKOUT_KEY);
-		await kv.delete(NOT_FOUND_STREAK_KEY);
-
-		try {
-			await noteNoradNotFound("NORAD ID 1");
-			expect((await isCelestrakLockedOut()).locked).toBe(false);
-
-			await noteNoradNotFound("NORAD ID 2");
-			expect((await isCelestrakLockedOut()).locked).toBe(false);
-
-			await noteNoradNotFound("NORAD ID 3");
-			expect((await isCelestrakLockedOut()).locked).toBe(true);
-		} finally {
-			config.maxConsecutiveNotFound = originalLimit;
-		}
-	});
-
-	test("a second storm inside the window backs off further", async () => {
-		const originalLimit = config.maxConsecutiveNotFound;
-		config.maxConsecutiveNotFound = 2;
-		await kv.delete(LOCKOUT_KEY);
-		await kv.delete(NOT_FOUND_STREAK_KEY);
-
-		try {
-			await noteNoradNotFound("NORAD ID 1");
-			await noteNoradNotFound("NORAD ID 2");
-			const firstUntil = (await isCelestrakLockedOut()).untilMs!;
-
-			await noteNoradNotFound("NORAD ID 3");
-			await noteNoradNotFound("NORAD ID 4");
-			const secondUntil = (await isCelestrakLockedOut()).untilMs!;
-
-			expect(secondUntil - firstUntil).toBeGreaterThan(9 * 60 * 1000);
-		} finally {
-			config.maxConsecutiveNotFound = originalLimit;
-		}
 	});
 });

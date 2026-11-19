@@ -10,17 +10,18 @@ export function getRandomJitter(maxJitterMs: number): number {
 	return Math.floor(Math.random() * maxJitterMs);
 }
 
-async function checkAndUpdateTles(): Promise<void> {
+async function checkAndUpdateTles(warm = false): Promise<void> {
 	const lockout = await isCelestrakLockedOut();
 	if (lockout.locked) {
 		log.warn(
-			`Celestrak is currently in ${formatLockoutDuration()} lockout (until ${lockout.untilIso}). Skipping background cron updates.`,
+			`Celestrak is in ${formatLockoutDuration(lockout.untilMs ? lockout.untilMs - Date.now() : undefined)} lockout (until ${lockout.untilIso}). Skipping background cron updates.`,
 		);
 		return;
 	}
 
-	log.debug("Running scheduled orbital data update check...");
+	log.debug(warm ? "Warming cached groups on startup..." : "Running scheduled orbital data update check...");
 	const now = Date.now();
+	let fetched = 0;
 
 	for (const group of config.allowedGroups) {
 		if (isDerivedGroup(group)) {
@@ -35,10 +36,10 @@ async function checkAndUpdateTles(): Promise<void> {
 		const isPrimaryGroup = group === "active";
 
 		if (!timestamp) {
-			if (!isPrimaryGroup) {
+			if (!isPrimaryGroup && !warm) {
 				continue;
 			}
-			log.info(`Primary group "${group}" is uninitialized. Fetching initial orbital data...`);
+			log.info(`Group "${group}" has no cached data. Fetching...`);
 		} else {
 			const refreshThreshold = group === "active" ? config.cacheActiveDuration : config.cacheDuration;
 			const age = now - timestamp;
@@ -51,6 +52,7 @@ async function checkAndUpdateTles(): Promise<void> {
 
 		try {
 			await fetchTle(group, "csv", queryType);
+			fetched++;
 		} catch (err) {
 			log.error(`Background cron failed to update group "${group}": ${err}`);
 			if ((await isCelestrakLockedOut()).locked) {
@@ -62,6 +64,8 @@ async function checkAndUpdateTles(): Promise<void> {
 		const interFetchDelay = 3000 + Math.floor(Math.random() * 5000);
 		await new Promise((resolve) => setTimeout(resolve, interFetchDelay));
 	}
+
+	if (warm) log.info(`Warm start finished: ${fetched} group(s) refreshed.`);
 }
 
 function scheduleNextCheck(): void {
@@ -85,10 +89,10 @@ function scheduleNextCheck(): void {
 export function startTleCron(): void {
 	const maxAgeDays = (config.maxStorageAge / (24 * 60 * 60 * 1000)).toFixed(1);
 	log.info(
-		`Starting orbital data background updater (interval: ${config.cronInterval / 1000}s, max jitter: ${config.cronJitter / 1000}s, max age: ${maxAgeDays} days).`,
+		`Starting orbital data background updater (interval: ${config.cronInterval / 1000}s, max jitter: ${config.cronJitter / 1000}s, max age: ${maxAgeDays} days, warm start: ${config.warmOnStart}).`,
 	);
 
-	checkAndUpdateTles().catch((err) => {
+	checkAndUpdateTles(config.warmOnStart).catch((err) => {
 		log.error(`Initial orbital data background check error: ${err}`);
 	});
 

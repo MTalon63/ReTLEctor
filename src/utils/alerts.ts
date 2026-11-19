@@ -25,7 +25,6 @@ function throttled(key: string): boolean {
 
 function colorFor(status: FailureKind): number {
 	if (status === "network") return COLOR_BLOCKED;
-	if (status === "not-found") return COLOR_CLIENT;
 	if (status === 403 || status === 429) return COLOR_BLOCKED;
 	if (status >= 500) return COLOR_SERVER;
 	return COLOR_CLIENT;
@@ -33,7 +32,6 @@ function colorFor(status: FailureKind): number {
 
 function labelFor(status: FailureKind): string {
 	if (status === "network") return "No response (timeout / connection refused)";
-	if (status === "not-found") return "Clients replaying dead catalog IDs (repeated 404s)";
 	return `HTTP ${status}`;
 }
 

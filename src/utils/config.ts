@@ -8,24 +8,28 @@ const demoNoradIds = new Set<number>([
 	61182, 61183, 62256, 67160, 67162,
 ]);
 
-const config = {
-	allowedGroups: Array.from(
-		new Set([
-			"active",
-			"active-no-starlink",
-			"demo",
-			...(process.env.ALLOWED_GROUPS
-				? process.env.ALLOWED_GROUPS.split(",")
-						.map((g) => g.trim())
-						.filter(Boolean)
-				: []),
-		]),
-	),
-	specialGroups: process.env.SPECIAL_GROUPS
-		? process.env.SPECIAL_GROUPS.split(",")
-				.map((g) => g.trim())
+function parseList(value: string | undefined): string[] {
+	return value
+		? value
+				.split(",")
+				.map((entry) => entry.trim())
 				.filter(Boolean)
-		: ["gpz", "gpz-plus", "decaying"],
+		: [];
+}
+
+// SPECIAL_GROUPS is fetched with SPECIAL= and allowed by itself.
+export function resolveGroups(allowedEnv?: string, specialEnv?: string): { allowedGroups: string[]; specialGroups: string[] } {
+	const specialGroups = parseList(specialEnv);
+	const allowedGroups = Array.from(new Set(["active", "active-no-starlink", "demo", ...parseList(allowedEnv), ...specialGroups]));
+
+	return { allowedGroups, specialGroups };
+}
+
+const groups = resolveGroups(process.env.ALLOWED_GROUPS, process.env.SPECIAL_GROUPS);
+
+const config = {
+	allowedGroups: groups.allowedGroups,
+	specialGroups: groups.specialGroups,
 
 	derivedGroups: {
 		"active-no-starlink": {
@@ -51,6 +55,7 @@ const config = {
 	cacheDuration: process.env.CACHE_DURATION ? parseInt(process.env.CACHE_DURATION) * 1000 : 12 * 60 * 60 * 1000,
 	cacheActiveDuration: process.env.CACHE_ACTIVE_DURATION ? parseInt(process.env.CACHE_ACTIVE_DURATION) * 1000 : 4 * 60 * 60 * 1000,
 	cacheNoradDuration: process.env.CACHE_NORAD_DURATION ? parseInt(process.env.CACHE_NORAD_DURATION) * 1000 : 24 * 60 * 60 * 1000,
+	cacheNotFoundDuration: process.env.CACHE_NOT_FOUND_DURATION ? parseInt(process.env.CACHE_NOT_FOUND_DURATION) * 1000 : 6 * 60 * 60 * 1000,
 	maxStorageAge: process.env.MAX_STORAGE_AGE
 		? parseInt(process.env.MAX_STORAGE_AGE) < 365
 			? parseInt(process.env.MAX_STORAGE_AGE) * 24 * 60 * 60 * 1000
@@ -58,12 +63,18 @@ const config = {
 		: 14 * 24 * 60 * 60 * 1000,
 	cronInterval: process.env.CRON_INTERVAL ? parseInt(process.env.CRON_INTERVAL) * 1000 : 60 * 60 * 1000,
 	cronJitter: process.env.CRON_JITTER ? parseInt(process.env.CRON_JITTER) * 1000 : 15 * 60 * 1000,
+	warmOnStart: process.env.WARM_ON_START === "1",
 	celestrakUrl: process.env.CELESTRAK_URL || "https://celestrak.org/NORAD/elements/gp.php",
-	celestrakMaxDirectRequests: process.env.CELESTRAK_MAX_DIRECT_REQUESTS ? parseInt(process.env.CELESTRAK_MAX_DIRECT_REQUESTS) : 25,
+	spacetrackUser: process.env.SPACETRACK_USER || null,
+	spacetrackPassword: process.env.SPACETRACK_PASS || null,
+	spacetrackUrl: process.env.SPACETRACK_URL || "https://www.space-track.org",
+	spacetrackMinSpacingMs: process.env.SPACETRACK_MIN_SPACING ? parseInt(process.env.SPACETRACK_MIN_SPACING) * 1000 : 2500,
+	spacetrackMaxPerMinute: process.env.SPACETRACK_MAX_PER_MINUTE ? parseInt(process.env.SPACETRACK_MAX_PER_MINUTE) : 20,
+	spacetrackMaxPerHour: process.env.SPACETRACK_MAX_PER_HOUR ? parseInt(process.env.SPACETRACK_MAX_PER_HOUR) : 250,
+	spacetrackMaxAgeDays: process.env.SPACETRACK_MAX_AGE_DAYS ? parseInt(process.env.SPACETRACK_MAX_AGE_DAYS) : 30,
 	upstreamTimeoutMs: process.env.UPSTREAM_TIMEOUT ? parseInt(process.env.UPSTREAM_TIMEOUT) * 1000 : 20 * 1000,
 	upstreamMinSpacingMs: process.env.UPSTREAM_MIN_SPACING ? parseInt(process.env.UPSTREAM_MIN_SPACING) * 1000 : 1000,
 	maxFailureBackoffMs: process.env.MAX_FAILURE_BACKOFF ? parseInt(process.env.MAX_FAILURE_BACKOFF) * 1000 : 48 * 60 * 60 * 1000,
-	maxConsecutiveNotFound: process.env.MAX_CONSECUTIVE_404 ? parseInt(process.env.MAX_CONSECUTIVE_404) : 10,
 	discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || null,
 	alertThrottleMs: process.env.ALERT_THROTTLE ? parseInt(process.env.ALERT_THROTTLE) * 1000 : 5 * 60 * 1000,
 	alertMinIntervalMs: process.env.ALERT_MIN_INTERVAL ? parseInt(process.env.ALERT_MIN_INTERVAL) * 1000 : 30 * 1000,

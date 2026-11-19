@@ -7,9 +7,8 @@ export const LOCKOUT_KEY = "celestrak_lockout_until";
 export const FAILURE_STREAK_KEY = "celestrak_failure_streak";
 const SERVER_STREAK_KEY = "celestrak_server_error_streak";
 const NETWORK_STREAK_KEY = "celestrak_network_streak";
-export const NOT_FOUND_STREAK_KEY = "celestrak_404_streak";
 
-export type FailureKind = number | "network" | "not-found";
+export type FailureKind = number | "network";
 
 const NETWORK_BACKOFF_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000, 6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000];
 const SERVER_ERROR_BACKOFF_MS = [15 * 60 * 1000, 30 * 60 * 1000, 60 * 60 * 1000, 2 * 60 * 60 * 1000];
@@ -63,56 +62,15 @@ export async function clearCelestrakFailures(): Promise<void> {
 	}
 }
 
-type NotFoundState = { count: number; trips: number; windowStart: number };
-
-const NOT_FOUND_WINDOW_MS = 60 * 60 * 1000;
-
-// A run of 404s is a client replaying a dead catalog; counted in a window so successes can't reset it.
-export async function noteNoradNotFound(context: string): Promise<void> {
-	const now = Date.now();
-	const stored = (await kv.get(NOT_FOUND_STREAK_KEY)) as NotFoundState | null;
-
-	let state: NotFoundState =
-		stored && typeof stored === "object" && typeof stored.count === "number" && typeof stored.trips === "number"
-			? stored
-			: { count: 0, trips: 0, windowStart: now };
-
-	if (now - state.windowStart > NOT_FOUND_WINDOW_MS) {
-		state = { count: 0, trips: 0, windowStart: now };
-	}
-
-	state.count++;
-
-	if (state.count < config.maxConsecutiveNotFound) {
-		await kv.set(NOT_FOUND_STREAK_KEY, state);
-		return;
-	}
-
-	state.count = 0;
-	state.trips++;
-	await kv.set(NOT_FOUND_STREAK_KEY, state);
-
-	const duration = NETWORK_BACKOFF_MS[Math.min(state.trips, NETWORK_BACKOFF_MS.length) - 1]!;
-	const lockoutUntil = now + duration;
-	await kv.set(LOCKOUT_KEY, lockoutUntil);
-
-	const isoStr = new Date(lockoutUntil).toISOString();
-	log.error(
-		`Repeated unknown catalog IDs during ${context} (storm ${state.trips} this hour). Pausing Celestrak queries for ${formatLockoutDuration(duration)} until ${isoStr}.`,
-	);
-
-	void notifyUpstreamFailure({ status: "not-found", context, streak: state.trips, durationMs: duration, untilIso: isoStr });
-}
-
 // Per-class ladders: a transient 500 must not inherit a block-sized pause.
 function streakKeyFor(status: FailureKind): string {
 	if (status === "network") return NETWORK_STREAK_KEY;
-	if (status !== "not-found" && status >= 500) return SERVER_STREAK_KEY;
+	if (status >= 500) return SERVER_STREAK_KEY;
 	return FAILURE_STREAK_KEY;
 }
 
 function lockoutDurationFor(status: FailureKind, streak: number): number {
-	if (status === "network" || status === "not-found") {
+	if (status === "network") {
 		return NETWORK_BACKOFF_MS[Math.min(streak, NETWORK_BACKOFF_MS.length) - 1]!;
 	}
 	if (status >= 500) {
@@ -136,7 +94,7 @@ export async function triggerCelestrakLockout(status: FailureKind, context: stri
 	await kv.set(LOCKOUT_KEY, lockoutUntil);
 
 	const isoStr = new Date(lockoutUntil).toISOString();
-	const reason = status === "network" ? "Network error/timeout" : status === "not-found" ? "Repeated 404s" : `HTTP ${status}`;
+	const reason = status === "network" ? "Network error/timeout" : `HTTP ${status}`;
 	log.error(
 		`${reason} during ${context} (consecutive failures: ${streak}). Initiating ${formatLockoutDuration(duration)} lockout until ${isoStr}. No further requests will be sent to Celestrak during this period.`,
 	);
