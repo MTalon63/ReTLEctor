@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import kv from "../src/utils/kv";
 import config from "../src/utils/config";
 import { resetUpstreamState } from "../src/utils/upstream";
@@ -16,6 +19,20 @@ const originalFetch = globalThis.fetch;
 const originalUser = config.spacetrackUser;
 const originalPass = config.spacetrackPassword;
 const originalSpacing = config.upstreamMinSpacingMs;
+const originalIndexFile = config.gpIndexFile;
+
+const GP_HEADER = HEADER;
+let indexFile = "";
+
+// Space-Track is answered from a locally built index, so seed that instead of stubbing per-id queries.
+async function seedGpIndex(rows: string[]): Promise<void> {
+	indexFile = join(tmpdir(), `retlector-norad-${Math.random().toString(36).slice(2)}.csv`);
+	await writeFile(indexFile, `${GP_HEADER}\n${rows.join("\n")}\n`, "utf8");
+	config.gpIndexFile = indexFile;
+	config.spacetrackUser = "operator@example.com";
+	config.spacetrackPassword = "secret";
+	resetSpaceTrackSession();
+}
 
 let upstreamCalls: string[] = [];
 let runBase = 0;
@@ -43,12 +60,15 @@ beforeEach(async () => {
 	await kv.delete("norad_25544_missing");
 });
 
-afterEach(() => {
+afterEach(async () => {
 	globalThis.fetch = originalFetch;
 	config.spacetrackUser = originalUser;
 	config.spacetrackPassword = originalPass;
 	config.upstreamMinSpacingMs = originalSpacing;
+	config.gpIndexFile = originalIndexFile;
 	resetSpaceTrackSession();
+	if (indexFile) await rm(indexFile, { force: true });
+	indexFile = "";
 });
 
 async function warmActive(): Promise<void> {
@@ -92,45 +112,11 @@ describe("per-NORAD lookups", () => {
 		expect(upstreamCalls.filter((u) => u.includes("CATNR"))).toHaveLength(0);
 	});
 
-	test("Space-Track answers when configured and Celestrak is still untouched", async () => {
-		config.spacetrackUser = "operator@example.com";
-		config.spacetrackPassword = "secret";
+	test("a locally held Space-Track record answers without touching Celestrak", async () => {
 		await warmActive();
-
-		globalThis.fetch = (async (input: string | URL) => {
-			const url = String(input);
-			if (url.includes("space-track.org")) {
-				if (url.endsWith("/ajaxauth/login")) {
-					return new Response("", { status: 200, headers: { "set-cookie": "chocolatechip=s1; Path=/" } });
-				}
-				return new Response(
-					JSON.stringify([
-						{
-							OBJECT_NAME: "DEAD SAT",
-							OBJECT_ID: "2020-001A",
-							EPOCH: "2026-11-19T00:00:00",
-							MEAN_MOTION: "15.1",
-							ECCENTRICITY: "0.001",
-							INCLINATION: "53",
-							RA_OF_ASC_NODE: "1",
-							ARG_OF_PERICENTER: "2",
-							MEAN_ANOMALY: "3",
-							EPHEMERIS_TYPE: "0",
-							CLASSIFICATION_TYPE: "U",
-							NORAD_CAT_ID: String(runBase),
-							ELEMENT_SET_NO: "999",
-							REV_AT_EPOCH: "10",
-							BSTAR: "0",
-							MEAN_MOTION_DOT: "0",
-							MEAN_MOTION_DDOT: "0",
-						},
-					]),
-					{ status: 200 },
-				);
-			}
-			upstreamCalls.push(url);
-			return new Response(ACTIVE_CSV, { status: 200 });
-		}) as unknown as typeof fetch;
+		await seedGpIndex([
+			`DEAD SAT,2020-001A,2026-11-19T00:00:00.000000,15.1,.001,53,1,2,3,0,U,${runBase},999,10,0,0,0`,
+		]);
 
 		const result = await getNoradData(runBase, "csv");
 
@@ -140,6 +126,7 @@ describe("per-NORAD lookups", () => {
 
 	test("a repeated unknown id is answered locally for six hours", async () => {
 		await warmActive();
+		await seedGpIndex([`ISS (ZARYA),1998-067A,2026-11-19T06:28:00.055776,15.49482233,.00074107,51.6317,252.6441,42.3196,317.8363,0,U,25544,999,59579,.25566563E-3,.13909E-3,0`]);
 
 		await expect(getNoradData(runBase, "csv")).rejects.toThrow();
 		const missingUntil = (await kv.get(`norad_${runBase}_missing`)) as number;

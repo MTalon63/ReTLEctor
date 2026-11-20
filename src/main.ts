@@ -3,6 +3,7 @@ import kv from "./utils/kv";
 import config from "./utils/config";
 import log from "./utils/logger";
 import { startTleCron } from "./utils/tleCron";
+import { startGpRefresh } from "./utils/spacetrack";
 import { isCorruptTleValue } from "./utils/tleFetcher";
 import { isDerivedGroup } from "./utils/derivedGroup";
 
@@ -54,6 +55,7 @@ async function validateKvOnBootup(): Promise<void> {
 
 await validateKvOnBootup();
 startTleCron();
+startGpRefresh();
 
 app.listen(config.port, () => {
 	log.info(`Server is running on port ${config.port}`);

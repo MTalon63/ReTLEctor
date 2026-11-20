@@ -1,55 +1,75 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import config from "./config";
 import log from "./logger";
-import { serialize } from "./upstream";
-import type { OmmRecord } from "./omm";
+import { parseOmmCsv, recordsToCsv, type OmmRecord } from "./omm";
+
+// Space-Track permits exactly one GP class query per hour, so everything arrives in a single bulk
+// request, is kept locally, and per-object lookups are answered from that index with no request.
+const DEFAULT_GP_PATH = "/basicspacedata/query/class/gp/decay_date/null-val/CREATION_DATE/%3Enow-0.042/format/csv";
+const REFRESH_GAP_MS = 30 * 60 * 1000;
+const SESSION_TTL_MS = 50 * 60 * 1000;
 
 let session: string | null = null;
 let sessionAt = 0;
-let lastRequestAt = 0;
-const requestLog: number[] = [];
+let loginSuspendedUntil = 0;
+let loginFailures = 0;
 
-const SESSION_TTL_MS = 50 * 60 * 1000;
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+let gpIndex = new Map<number, OmmRecord>();
+let gpIndexAt = 0;
+let indexLoaded = false;
+let refreshing: Promise<number> | null = null;
+let timer: ReturnType<typeof setTimeout> | null = null;
 
 function isConfigured(): boolean {
 	return Boolean(config.spacetrackUser && config.spacetrackPassword);
 }
 
-// One queue, spaced and capped under Space-Track's 30/min and 300/hour.
-async function awaitSlot(): Promise<void> {
-	for (;;) {
-		const now = Date.now();
-		while (requestLog.length && now - requestLog[0]! > 60 * 60 * 1000) requestLog.shift();
+function epochMs(record: OmmRecord): number {
+	const epoch = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(record.EPOCH) ? record.EPOCH : `${record.EPOCH}Z`);
 
-		const inMinute = requestLog.filter((t) => now - t < 60 * 1000);
-		if (inMinute.length >= config.spacetrackMaxPerMinute) {
-			await sleep(60 * 1000 - (now - inMinute[0]!) + 100);
-			continue;
-		}
-		if (requestLog.length >= config.spacetrackMaxPerHour) {
-			await sleep(60 * 1000 - (now - requestLog[0]!) + 100);
-			continue;
-		}
+	return Number.isFinite(epoch) ? epoch : 0;
+}
 
-		const wait = lastRequestAt + config.spacetrackMinSpacingMs - now;
-		if (wait > 0) await sleep(wait);
-		break;
-	}
+// They keep serving the last element set of dropped objects; a stale epoch means no current data.
+function isStale(record: OmmRecord): boolean {
+	if (config.spacetrackMaxAgeDays <= 0) return false;
 
-	lastRequestAt = Date.now();
-	requestLog.push(lastRequestAt);
+	const epoch = epochMs(record);
+	if (epoch === 0) return false;
+
+	return (Date.now() - epoch) / 86_400_000 > config.spacetrackMaxAgeDays;
 }
 
 async function login(): Promise<string> {
+	const suspended = loginSuspendedUntil - Date.now();
+	if (suspended > 0) {
+		throw new Error(
+			`Space-Track logins suspended for another ${Math.ceil(suspended / 60_000)}m; check SPACETRACK_USER / SPACETRACK_PASS`,
+		);
+	}
+
 	const response = await fetch(`${config.spacetrackUrl}/ajaxauth/login`, {
 		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+		headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": config.userAgent },
 		body: new URLSearchParams({ identity: config.spacetrackUser!, password: config.spacetrackPassword! }).toString(),
 		signal: AbortSignal.timeout(config.upstreamTimeoutMs),
 	});
 
-	if (!response.ok) throw new Error(`Space-Track login failed: HTTP ${response.status}`);
+	const body = (await response.text()).trim();
+
+	// A rejected login is HTTP 200 with {"Login":"Failed"} and a cookie, so trusting the status
+	// leaves every later query silently 401ing.
+	if (!response.ok || /"Login"\s*:\s*"Failed"/i.test(body)) {
+		loginFailures++;
+		const pauseMs = Math.min(config.spacetrackLoginCooldownMs * 2 ** (loginFailures - 1), 60 * 60 * 1000);
+		loginSuspendedUntil = Date.now() + pauseMs;
+		const reason = body || `HTTP ${response.status}`;
+		log.error(
+			`Space-Track rejected the login (${reason}); pausing logins for ${Math.round(pauseMs / 60_000)}m. Check SPACETRACK_USER / SPACETRACK_PASS.`,
+		);
+		throw new Error(`Space-Track login rejected: ${reason}`);
+	}
 
 	const cookies = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
 	const cookie = cookies.map((c) => c.split(";")[0]).join("; ") || response.headers.get("set-cookie")?.split(";")[0] || "";
@@ -57,6 +77,7 @@ async function login(): Promise<string> {
 
 	session = cookie;
 	sessionAt = Date.now();
+	loginFailures = 0;
 	log.info("Space-Track session established.");
 
 	return cookie;
@@ -81,72 +102,117 @@ async function query(path: string): Promise<Response> {
 	return response;
 }
 
-function toRecord(raw: Record<string, string>): OmmRecord {
-	const num = (key: string) => {
-		const value = parseFloat(raw[key] ?? "");
-		return Number.isFinite(value) ? value : 0;
-	};
+async function loadIndex(): Promise<void> {
+	if (indexLoaded) return;
+	indexLoaded = true;
 
-	return {
-		OBJECT_NAME: raw.OBJECT_NAME ?? "",
-		OBJECT_ID: raw.OBJECT_ID ?? "",
-		EPOCH: raw.EPOCH ?? "",
-		MEAN_MOTION: num("MEAN_MOTION"),
-		ECCENTRICITY: num("ECCENTRICITY"),
-		INCLINATION: num("INCLINATION"),
-		RA_OF_ASC_NODE: num("RA_OF_ASC_NODE"),
-		ARG_OF_PERICENTER: num("ARG_OF_PERICENTER"),
-		MEAN_ANOMALY: num("MEAN_ANOMALY"),
-		EPHEMERIS_TYPE: num("EPHEMERIS_TYPE"),
-		CLASSIFICATION_TYPE: raw.CLASSIFICATION_TYPE || "U",
-		NORAD_CAT_ID: num("NORAD_CAT_ID"),
-		ELEMENT_SET_NO: num("ELEMENT_SET_NO"),
-		REV_AT_EPOCH: num("REV_AT_EPOCH"),
-		BSTAR: num("BSTAR"),
-		MEAN_MOTION_DOT: num("MEAN_MOTION_DOT"),
-		MEAN_MOTION_DDOT: num("MEAN_MOTION_DDOT"),
-	};
-}
-
-// They keep serving the last element set of dropped objects; a stale epoch means no current data.
-function epochAgeDays(record: OmmRecord): number | undefined {
-	const epoch = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(record.EPOCH) ? record.EPOCH : `${record.EPOCH}Z`);
-
-	return Number.isFinite(epoch) ? (Date.now() - epoch) / 86_400_000 : undefined;
+	try {
+		const csv = await readFile(config.gpIndexFile, "utf8");
+		for (const record of parseOmmCsv(csv)) gpIndex.set(record.NORAD_CAT_ID, record);
+		log.info(`Loaded ${gpIndex.size} cached GP record(s) from ${config.gpIndexFile}.`);
+	} catch {
+		gpIndexAt = 0;
+	}
 }
 
 export function spaceTrackEnabled(): boolean {
 	return isConfigured();
 }
 
-export async function fetchGpByNoradId(noradId: number): Promise<OmmRecord | null> {
-	if (!isConfigured()) return null;
+export async function gpIndexSize(): Promise<number> {
+	if (!isConfigured()) return 0;
+	await loadIndex();
 
-	return serialize(async () => {
-		await awaitSlot();
+	return gpIndex.size;
+}
 
-		const response = await query(`/basicspacedata/query/class/gp/NORAD_CAT_ID/${noradId}/format/json`);
-		if (!response.ok) throw new Error(`Space-Track query failed for NORAD ID ${noradId}: HTTP ${response.status}`);
+export async function refreshGpIndex(force = false): Promise<number> {
+	if (!isConfigured()) return 0;
+	await loadIndex();
 
-		const payload = (await response.json()) as Record<string, string>[];
-		if (!Array.isArray(payload) || payload.length === 0) return null;
+	if (!force && Date.now() - gpIndexAt < REFRESH_GAP_MS) return 0;
+	if (refreshing) return refreshing;
 
-		const record = toRecord(payload[0]!);
-		const ageDays = epochAgeDays(record);
-		if (ageDays !== undefined && config.spacetrackMaxAgeDays > 0 && ageDays > config.spacetrackMaxAgeDays) {
-			log.info(
-				`Space-Track GP for NORAD ID ${noradId} (${record.OBJECT_NAME}) is ${ageDays.toFixed(0)} days old (epoch ${record.EPOCH}); treating as no data.`,
-			);
-			return null;
+	refreshing = (async () => {
+		const response = await query(config.spacetrackGpPath || DEFAULT_GP_PATH);
+		if (!response.ok) throw new Error(`Space-Track GP refresh failed: HTTP ${response.status}`);
+
+		const fetched = parseOmmCsv(await response.text());
+		let added = 0;
+
+		for (const record of fetched) {
+			const existing = gpIndex.get(record.NORAD_CAT_ID);
+			if (!existing) added++;
+			if (!existing || epochMs(record) >= epochMs(existing)) gpIndex.set(record.NORAD_CAT_ID, record);
 		}
 
-		return record;
-	});
+		gpIndexAt = Date.now();
+		await mkdir(dirname(config.gpIndexFile), { recursive: true });
+		await writeFile(config.gpIndexFile, recordsToCsv([...gpIndex.values()]), "utf8");
+		log.info(`Space-Track GP refresh: ${fetched.length} record(s) received, ${added} new, ${gpIndex.size} held.`);
+
+		return fetched.length;
+	})();
+
+	try {
+		return await refreshing;
+	} finally {
+		refreshing = null;
+	}
+}
+
+export async function fetchGpByNoradId(noradId: number): Promise<OmmRecord | null> {
+	if (!isConfigured()) return null;
+	await loadIndex();
+
+	const record = gpIndex.get(noradId);
+	if (!record) return null;
+
+	if (isStale(record)) {
+		log.info(`Cached Space-Track GP for NORAD ID ${noradId} (${record.OBJECT_NAME}) is too old (epoch ${record.EPOCH}); no data.`);
+		return null;
+	}
+
+	return record;
+}
+
+function msUntilNextSlot(): number {
+	const now = new Date();
+	const target = new Date(now);
+	target.setUTCMinutes(config.spacetrackGpMinute, 0, 0);
+	if (target <= now) target.setUTCHours(target.getUTCHours() + 1);
+
+	return target.getTime() - now.getTime() + Math.floor(Math.random() * 60_000);
+}
+
+export function startGpRefresh(): void {
+	if (!isConfigured() || timer) return;
+
+	const tick = () => {
+		refreshGpIndex(true).catch((err) => log.error(`Scheduled Space-Track GP refresh failed: ${err}`));
+		timer = setTimeout(tick, 60 * 60 * 1000);
+	};
+
+	timer = setTimeout(tick, msUntilNextSlot());
+	log.info(`Space-Track GP refresh scheduled at :${String(config.spacetrackGpMinute).padStart(2, "0")} UTC every hour.`);
+
+	if (Date.now() - gpIndexAt > 60 * 60 * 1000) {
+		refreshGpIndex(true).catch((err) => log.error(`Initial Space-Track GP refresh failed: ${err}`));
+	}
 }
 
 export function resetSpaceTrackSession(): void {
 	session = null;
 	sessionAt = 0;
-	lastRequestAt = 0;
-	requestLog.length = 0;
+	loginSuspendedUntil = 0;
+	loginFailures = 0;
+	gpIndex = new Map<number, OmmRecord>();
+	gpIndexAt = 0;
+	indexLoaded = false;
+	refreshing = null;
+
+	if (timer) {
+		clearTimeout(timer);
+		timer = null;
+	}
 }

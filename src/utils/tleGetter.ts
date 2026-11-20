@@ -3,7 +3,7 @@ import log from "./logger";
 import config from "./config";
 import fetchTle from "./tleFetcher";
 import { coalesce } from "./upstream";
-import { fetchGpByNoradId, spaceTrackEnabled } from "./spacetrack";
+import { fetchGpByNoradId, gpIndexSize, spaceTrackEnabled } from "./spacetrack";
 import { decode as decodeAlpha5 } from "./alpha5";
 import { parseOmmCsv, csvTo3le, csvToJson, csvToKvn, recordsToCsv, type OmmRecord } from "./omm";
 
@@ -105,7 +105,9 @@ async function getNoradCsvUncoalesced(noradId: number): Promise<{ csv: string; r
 		}
 	}
 
-	if (spaceTrackEnabled()) {
+	const indexReady = spaceTrackEnabled() && (await gpIndexSize()) > 0;
+
+	if (indexReady) {
 		try {
 			const record = await fetchGpByNoradId(noradId);
 			if (record) {
@@ -122,7 +124,9 @@ async function getNoradCsvUncoalesced(noradId: number): Promise<{ csv: string; r
 		}
 	}
 
-	await markMissing(noradId);
+	// Only a populated index proves the object is absent; without one, don't poison the cache.
+	if (indexReady) await markMissing(noradId);
+
 	if (cachedCsv) return { csv: cachedCsv, timestamp: timestamp ?? now };
 
 	throw notFound(noradId);

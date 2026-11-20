@@ -17,8 +17,12 @@ services:
             - PORT=3000 # Port to run the server on.
             - CONTACT_EMAIL=admin@example.com # Operator contact email/info sent in User-Agent header to Celestrak.
             - CELESTRAK_URL=https://celestrak.org/NORAD/elements/gp.php # Upstream Celestrak API URL.
-            - SPACETRACK_USER= # Space-Track.org account used for per-NORAD-ID lookups (never Celestrak).
+            - SPACETRACK_USER= # Optional: Space-Track.org account, used only for the single hourly GP pull.
             - SPACETRACK_PASS=
+            - SPACETRACK_GP_MINUTE=12 # Minute past the hour for the hourly GP query; avoid :00 and :30.
+            - SPACETRACK_MAX_AGE_DAYS=30 # Ignore records whose element epoch is older than this.
+            - SPACETRACK_LOGIN_COOLDOWN=900 # Seconds to back off after a rejected login.
+            - GP_INDEX_FILE=./data/gp-index.csv # Local store of merged GP records.
             - DISCORD_WEBHOOK_URL= # Optional Discord webhook for upstream failure/recovery alerts. Leave empty to disable.
             - SITE_URL=https://example.com # Public domain URL of this instance.
             - GITHUB_URL=https://github.com/MrTalon63/ReTLEctor # Repository link shown in footer and header.
