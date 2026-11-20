@@ -102,12 +102,9 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 
 		if (isNotModifiedNotice(csvData)) {
 			log.info(
-				`Celestrak reported orbital data for group "${group}" has not updated (HTTP ${response.status}). Refreshing cache timestamp and serving cached data.`,
+				`Celestrak has no newer data for group "${group}" (HTTP ${response.status} not-modified notice); keeping the cached copy.`,
 			);
 			await kv.set(`${group}_timestamp_${upstreamFormat}`, Date.now());
-			if (!response.ok && response.status !== 404) {
-				await triggerCelestrakLockout(response.status, `group "${group}" (403/429 not-modified notice)`);
-			}
 			if (cachedCsv) {
 				return deriveFormat(cachedCsv, format);
 			}
@@ -117,7 +114,12 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 		}
 
 		if (!response.ok) {
-			const lockoutUntil = await triggerCelestrakLockout(response.status, `group "${group}"`);
+			// Put upstream's own words in the alert so a 403 is not mistaken for a block.
+			const snippet = csvData.trim().replace(/\s+/g, " ").slice(0, 120);
+			const lockoutUntil = await triggerCelestrakLockout(
+				response.status,
+				`group "${group}"${snippet ? ` — "${snippet}"` : ""}`,
+			);
 			if (cachedCsv) {
 				log.warn(`Serving stale cached orbital data for group "${group}" due to non-200 response (${response.status}).`);
 				return deriveFormat(cachedCsv, format);

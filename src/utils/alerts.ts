@@ -48,6 +48,8 @@ async function post(payload: unknown): Promise<void> {
 
 		if (!response.ok) {
 			log.warn(`Discord webhook returned ${response.status} ${response.statusText}.`);
+		} else {
+			log.info("Alert delivered to Discord.");
 		}
 	} catch (err) {
 		log.warn(`Discord webhook failed: ${err}`);
