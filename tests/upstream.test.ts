@@ -165,20 +165,20 @@ describe("failure backoff", () => {
 		expect(await kv.get(FAILURE_STREAK_KEY)).toBeFalsy();
 	});
 
-	test("a stalled download is aborted", async () => {
-		config.upstreamStallMs = 60;
+	test("a body that errors mid-stream rejects instead of hanging", async () => {
 		globalThis.fetch = (async () =>
 			new Response(
 				new ReadableStream({
 					start(stream) {
 						stream.enqueue(new TextEncoder().encode("partial"));
+						stream.error(new Error("socket reset"));
 					},
 				}),
 			)) as unknown as typeof fetch;
 
-		const response = await upstreamFetch("https://example.test/stall");
+		const response = await upstreamFetch("https://example.test/error");
 
-		await expect(response.text()).rejects.toThrow();
+		await expect(response.text()).rejects.toThrow(/socket reset/);
 	});
 
 	test("a slow but progressing download completes", async () => {
