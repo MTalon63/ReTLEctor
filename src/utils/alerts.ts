@@ -91,6 +91,40 @@ export async function notifyUpstreamFailure(alert: UpstreamFailureAlert): Promis
 	failureAlerted = true;
 }
 
+export interface RedirectAlert {
+	status: number;
+	context: string;
+	from: string;
+	to: string;
+}
+
+export async function notifyRedirect(alert: RedirectAlert): Promise<void> {
+	if (!config.discordWebhookUrl) return;
+	if (throttled(`redirect:${alert.status}`)) {
+		log.debug(`Redirect alert for ${alert.context} suppressed by throttle.`);
+		return;
+	}
+
+	await post({
+		username: config.appName,
+		embeds: [
+			{
+				title: `Celestrak: HTTP ${alert.status} redirect - endpoint moved`,
+				description:
+					`A ${alert.context} request was redirected and the new endpoint is now in use. ` +
+					"Update CELESTRAK_URL: the old one keeps counting toward their 50-errors-per-2-hours firewall.",
+				color: COLOR_CLIENT,
+				fields: [
+					{ name: "From", value: `\`${alert.from}\``.slice(0, 1024), inline: false },
+					{ name: "To", value: `\`${alert.to}\``.slice(0, 1024), inline: false },
+				],
+				footer: { text: `${config.appName} ${version}` },
+				timestamp: new Date().toISOString(),
+			},
+		],
+	});
+}
+
 export async function notifyUpstreamRecovered(streak: number): Promise<void> {
 	if (!config.discordWebhookUrl || !failureAlerted) return;
 	failureAlerted = false;

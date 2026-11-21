@@ -31,7 +31,7 @@ export interface NoradResult {
 	modified: number;
 }
 
-// Element epoch, not the cache stamp — that is what a consumer tracks.
+// Element epoch, not the cache stamp - that is what a consumer tracks.
 function elementEpochMs(csv: string): number | undefined {
 	const epoch = parseOmmCsv(csv)[0]?.EPOCH;
 	if (!epoch) return undefined;

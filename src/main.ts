@@ -24,24 +24,24 @@ async function validateKvOnBootup(): Promise<void> {
 		if (!hasValidCsv) {
 			if (csvValue !== null && csvValue !== undefined) {
 				log.warn(
-					`KV entry "${csvKey}" looks corrupt — purging (length=${csvValue?.length ?? 0}, preview="${csvValue?.slice(0, 60).replace(/\n/g, "\\n")}")`,
+					`KV entry "${csvKey}" looks corrupt - purging (length=${csvValue?.length ?? 0}, preview="${csvValue?.slice(0, 60).replace(/\n/g, "\\n")}")`,
 				);
 				await kv.delete(csvKey);
 				await kv.delete(csvTsKey);
 				purged++;
 			}
 
-			for (const format of config.formats) {
-				if (format === "csv") continue;
-				const dataKey = `${group}_${format}`;
-				const tsKey = `${group}_timestamp_${format}`;
-				const value = (await kv.get(dataKey)) as string | null;
-				if (value !== null && value !== undefined) {
-					log.warn(`KV entry "${dataKey}" has no source CSV — purging stale derived cache.`);
-					await kv.delete(dataKey);
-					await kv.delete(tsKey);
-					purged++;
-				}
+		}
+
+		// Derived formats are memory-only now; drop the blobs older builds left behind.
+		for (const format of config.formats) {
+			if (format === "csv") continue;
+			const dataKey = `${group}_${format}`;
+			const tsKey = `${group}_timestamp_${format}`;
+			if ((await kv.get(dataKey)) !== undefined) {
+				await kv.delete(dataKey);
+				await kv.delete(tsKey);
+				purged++;
 			}
 		}
 	}

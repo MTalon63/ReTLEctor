@@ -27,20 +27,26 @@ export function resolveGroups(allowedEnv?: string, specialEnv?: string): { allow
 
 const groups = resolveGroups(process.env.ALLOWED_GROUPS, process.env.SPECIAL_GROUPS);
 
-const config = {
-	allowedGroups: groups.allowedGroups,
-	specialGroups: groups.specialGroups,
+const derivedGroups = {
+	starlink: {
+		source: "active",
+		filter: (name: string) => name.toUpperCase().startsWith("STARLINK"),
+	},
+	"active-no-starlink": {
+		source: "active",
+		filter: (name: string) => !name.toUpperCase().startsWith("STARLINK"),
+	},
+	demo: {
+		source: "active",
+		filter: (_name: string, noradId?: number) => noradId !== undefined && demoNoradIds.has(noradId),
+	},
+} as const;
 
-	derivedGroups: {
-		"active-no-starlink": {
-			source: "active",
-			filter: (name: string) => !name.toUpperCase().startsWith("STARLINK"),
-		},
-		demo: {
-			source: "active",
-			filter: (_name: string, noradId?: number) => noradId !== undefined && demoNoradIds.has(noradId),
-		},
-	} as const,
+const config = {
+	// Derived groups are allowed by definition, so they never need to appear in ALLOWED_GROUPS.
+	allowedGroups: Array.from(new Set([...groups.allowedGroups, ...Object.keys(derivedGroups)])),
+	specialGroups: groups.specialGroups,
+	derivedGroups,
 	formats: ["tle", "json", "csv", "kvn"] as const,
 	logLevel: process.env.LOG_LEVEL || "info",
 	port: process.env.PORT ? parseInt(process.env.PORT) : 3000,

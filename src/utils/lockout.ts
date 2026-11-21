@@ -55,6 +55,7 @@ export async function clearCelestrakFailures(): Promise<void> {
 
 	await kv.delete(SERVER_STREAK_KEY);
 	await kv.delete(NETWORK_STREAK_KEY);
+	await kv.delete(LOCKOUT_KEY);
 
 	if (streak) {
 		await kv.delete(FAILURE_STREAK_KEY);

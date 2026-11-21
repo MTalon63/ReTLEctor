@@ -161,7 +161,7 @@ describe("Epoch conversion", () => {
 		expect(date.getUTCDate()).toBe(15);
 	});
 
-	test("round-trip: isoToTleEpoch → tleEpochToIso", () => {
+	test("round-trip: isoToTleEpoch -> tleEpochToIso", () => {
 		const original = "2026-08-15T02:00:30.363264";
 		const { year, day } = isoToTleEpoch(original);
 		const result = tleEpochToIso(year, day);
@@ -213,8 +213,8 @@ describe("3LE parsing", () => {
 	});
 });
 
-describe("CSV ↔ 3LE round-trip", () => {
-	test("CSV → 3LE → parse3le preserves key fields", () => {
+describe("CSV <-> 3LE round-trip", () => {
+	test("CSV -> 3LE -> parse3le preserves key fields", () => {
 		const tle = csvTo3le(issCsv);
 		const records = parse3le(tle);
 		expect(records).toHaveLength(1);
@@ -265,7 +265,7 @@ describe("CCSDS OMM KVN conversion and parsing", () => {
 		expect(kvn).toContain("MEAN_MOTION    = 15.49446478");
 	});
 
-	test("round-trip: KVN → JSON → KVN preserves record integrity", () => {
+	test("round-trip: KVN -> JSON -> KVN preserves record integrity", () => {
 		const json = kvnToJson(issKvn);
 		const parsed = JSON.parse(json);
 		expect(parsed).toHaveLength(1);
@@ -273,7 +273,7 @@ describe("CCSDS OMM KVN conversion and parsing", () => {
 		expect(parsed[0]!.OBJECT_NAME).toBe("ISS (ZARYA)");
 	});
 
-	test("round-trip: KVN → CSV → KVN", () => {
+	test("round-trip: KVN -> CSV -> KVN", () => {
 		const csv = kvnToCsv(issKvn);
 		const records = parseOmmCsv(csv);
 		expect(records).toHaveLength(1);

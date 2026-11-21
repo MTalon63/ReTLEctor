@@ -108,27 +108,27 @@ describe("alpha5 encode", () => {
 		expect(encode(99999)).toBe("99999");
 	});
 
-	test("Alpha-5: 100000 → A0000", () => {
+	test("Alpha-5: 100000 -> A0000", () => {
 		expect(encode(100000)).toBe("A0000");
 	});
 
-	test("Alpha-5: 100123 → A0123", () => {
+	test("Alpha-5: 100123 -> A0123", () => {
 		expect(encode(100123)).toBe("A0123");
 	});
 
-	test("Alpha-5: 110000 → B0000", () => {
+	test("Alpha-5: 110000 -> B0000", () => {
 		expect(encode(110000)).toBe("B0000");
 	});
 
-	test("Alpha-5: 180000 → J0000 (skips I)", () => {
+	test("Alpha-5: 180000 -> J0000 (skips I)", () => {
 		expect(encode(180000)).toBe("J0000");
 	});
 
-	test("Alpha-5: 230000 → P0000 (skips O)", () => {
+	test("Alpha-5: 230000 -> P0000 (skips O)", () => {
 		expect(encode(230000)).toBe("P0000");
 	});
 
-	test("Alpha-5: 339999 → Z9999 (max)", () => {
+	test("Alpha-5: 339999 -> Z9999 (max)", () => {
 		expect(encode(339999)).toBe("Z9999");
 	});
 

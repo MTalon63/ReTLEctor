@@ -1,10 +1,14 @@
 import { Elysia } from "elysia";
 
-import kv from "./kv";
 import log from "./logger";
 import config from "./config";
 
 type ClientInfo = { count: number; startTime: number };
+
+// In memory on purpose: the file-backed KV rewrites the whole store on every set, which cost
+// ~300ms per request when this was persisted.
+const buckets = new Map<string, ClientInfo>();
+let lastSweep = Date.now();
 
 // Trust Cloudflare only when it signed the request, otherwise the hop our own proxy appended.
 function clientIp(ctx: { request: Request; server?: unknown }): string {
@@ -27,24 +31,32 @@ function limitHeaders(maxRequests: number, count: number, startTime: number, win
 	};
 }
 
+function sweep(now: number, windowSize: number): void {
+	if (now - lastSweep < 60_000) return;
+	lastSweep = now;
+
+	for (const [key, info] of buckets) {
+		if (now - info.startTime >= windowSize) buckets.delete(key);
+	}
+}
+
+export function resetRateLimiter(): void {
+	buckets.clear();
+	lastSweep = Date.now();
+}
+
 const limiter = new Elysia({ name: "rate-limiter" }).onRequest(async (ctx) => {
 	const ip = clientIp(ctx);
-	const key = `rate_limit:${ip}`;
 	const now = Date.now();
 	const windowSize = config.rateLimitWindow;
 	const maxRequests = config.rateLimitMaxRequests;
 
-	let clientInfo = (await kv.get(key)) as ClientInfo | undefined;
-	if (!clientInfo) {
-		clientInfo = { count: 1, startTime: now };
-		await kv.set(key, clientInfo, windowSize);
-		Object.assign(ctx.set.headers, limitHeaders(maxRequests, clientInfo.count, clientInfo.startTime, windowSize));
-		return;
-	}
+	sweep(now, windowSize);
 
-	if (now - clientInfo.startTime >= windowSize) {
+	let clientInfo = buckets.get(ip);
+	if (!clientInfo || now - clientInfo.startTime >= windowSize) {
 		clientInfo = { count: 1, startTime: now };
-		await kv.set(key, clientInfo, windowSize);
+		buckets.set(ip, clientInfo);
 		Object.assign(ctx.set.headers, limitHeaders(maxRequests, clientInfo.count, clientInfo.startTime, windowSize));
 		return;
 	}
@@ -54,6 +66,7 @@ const limiter = new Elysia({ name: "rate-limiter" }).onRequest(async (ctx) => {
 	if (clientInfo.count > maxRequests) {
 		log.debug(`Rate limit exceeded for IP ${ip}`);
 		const retryAfterSeconds = Math.max(1, Math.ceil((clientInfo.startTime + windowSize - now) / 1000));
+
 		return new Response("Too Many Requests", {
 			status: 429,
 			headers: {
@@ -64,8 +77,6 @@ const limiter = new Elysia({ name: "rate-limiter" }).onRequest(async (ctx) => {
 	}
 
 	Object.assign(ctx.set.headers, limitHeaders(maxRequests, clientInfo.count, clientInfo.startTime, windowSize));
-	const remainingTtl = Math.max(1, windowSize - (now - clientInfo.startTime));
-	await kv.set(key, clientInfo, remainingTtl);
 });
 
 export default limiter;

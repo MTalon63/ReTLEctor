@@ -4,8 +4,7 @@ import config from "./config";
 import log from "./logger";
 import { parseOmmCsv, recordsToCsv, type OmmRecord } from "./omm";
 
-// Space-Track permits exactly one GP class query per hour, so everything arrives in a single bulk
-// request, is kept locally, and per-object lookups are answered from that index with no request.
+// Space-Track allows one GP query per hour: fetch in bulk, keep locally, answer from the index.
 const DEFAULT_GP_PATH = "/basicspacedata/query/class/gp/decay_date/null-val/CREATION_DATE/%3Enow-0.042/format/csv";
 const REFRESH_GAP_MS = 30 * 60 * 1000;
 const SESSION_TTL_MS = 50 * 60 * 1000;
@@ -58,8 +57,7 @@ async function login(): Promise<string> {
 
 	const body = (await response.text()).trim();
 
-	// A rejected login is HTTP 200 with {"Login":"Failed"} and a cookie, so trusting the status
-	// leaves every later query silently 401ing.
+	// A rejected login is HTTP 200 with {"Login":"Failed"}, so the status proves nothing.
 	if (!response.ok || /"Login"\s*:\s*"Failed"/i.test(body)) {
 		loginFailures++;
 		const pauseMs = Math.min(config.spacetrackLoginCooldownMs * 2 ** (loginFailures - 1), 60 * 60 * 1000);

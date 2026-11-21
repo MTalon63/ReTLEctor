@@ -2,6 +2,8 @@ import log from "./logger";
 import kv from "./kv";
 import config from "./config";
 import { coalesce, upstreamFetch } from "./upstream";
+import { setDerived } from "./derived";
+import { notifyRedirect } from "./alerts";
 import { isCelestrakLockedOut, triggerCelestrakLockout, clearCelestrakFailures, formatRemainingLockout } from "./lockout";
 import { csvTo3le, csvToJson, csvToKvn, parseOmmCsv } from "./omm";
 
@@ -46,9 +48,48 @@ export function isCorruptTleValue(value: string | null | undefined): boolean {
 	return false;
 }
 
+// A 301 counts against the IP, so follow once, remember the new endpoint and report it.
+const ENDPOINT_KEY = "celestrak_url_current";
+const REDIRECT_STATUSES = new Set([301, 302, 307, 308]);
+
+async function followRedirect(group: string, from: string, response: Response, headers: Record<string, string>): Promise<Response> {
+	const location = response.headers.get("location");
+	if (!location) return response;
+
+	const target = new URL(location, from);
+	const base = `${target.origin}${target.pathname}`;
+	const query = new URL(from).searchParams.toString();
+
+	await kv.set(ENDPOINT_KEY, base);
+	log.error(
+		`Celestrak redirected group "${group}" with HTTP ${response.status} to ${base} - switched to that endpoint. Update CELESTRAK_URL; the old URL will keep costing errors.`,
+	);
+	void notifyRedirect({ status: response.status, context: `group "${group}"`, from, to: base }).catch((err) =>
+		log.warn(`Redirect alert failed: ${err}`),
+	);
+
+	return upstreamFetch(`${base}?${query}`, { headers });
+}
+
+// A 404 will not change by asking again, and their firewall trips at 50 errors in 2 hours.
+function missingKey(group: string): string {
+	return `group_missing:${group}`;
+}
+
+async function noteMissingGroup(group: string): Promise<void> {
+	await kv.set(missingKey(group), Date.now() + config.cacheNotFoundDuration, config.cacheNotFoundDuration);
+}
+
 async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", queryType: string = "GROUP"): Promise<string> {
 	const upstreamFormat = "csv";
 	const cachedCsv = (await kv.get(`${group}_${upstreamFormat}`)) as string | null;
+
+	const missingUntil = (await kv.get(missingKey(group))) as number | null;
+	if (missingUntil && missingUntil > Date.now()) {
+		const cachedNotFound = new Error(`Group "${group}" does not exist upstream (answer cached)`);
+		(cachedNotFound as any).statusCode = 404;
+		throw cachedNotFound;
+	}
 
 	const lockout = await isCelestrakLockedOut();
 	if (lockout.locked) {
@@ -61,7 +102,8 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 		throw new Error(`Celestrak is currently in ${formatRemainingLockout(lockout)} lockout until ${lockout.untilIso}`);
 	}
 
-	const url = `${config.celestrakUrl}?${queryType}=${group}&FORMAT=${upstreamFormat}`;
+	const endpoint = ((await kv.get(ENDPOINT_KEY)) as string | null) || config.celestrakUrl;
+	const url = `${endpoint}?${queryType}=${group}&FORMAT=${upstreamFormat}`;
 	log.debug(`Fetching orbital data for group "${group}" in CSV format from Celestrak...`);
 
 	try {
@@ -75,7 +117,10 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 
 		let response: Response;
 		try {
-			response = await upstreamFetch(url, { headers });
+			response = await upstreamFetch(url, { headers, redirect: "manual" });
+			if (REDIRECT_STATUSES.has(response.status)) {
+				response = await followRedirect(group, url, response, headers);
+			}
 		} catch (err) {
 			await triggerCelestrakLockout("network", `group "${group}"`);
 			throw err;
@@ -93,6 +138,8 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 
 		if (response.status === 404) {
 			log.warn(`Celestrak returned 404 Not Found for group "${group}".`);
+			await kv.delete(ENDPOINT_KEY);
+			await noteMissingGroup(group);
 			const notFoundError = new Error(`Group "${group}" not found on upstream Celestrak (404)`);
 			(notFoundError as any).statusCode = 404;
 			throw notFoundError;
@@ -118,7 +165,7 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 			const snippet = csvData.trim().replace(/\s+/g, " ").slice(0, 120);
 			const lockoutUntil = await triggerCelestrakLockout(
 				response.status,
-				`group "${group}"${snippet ? ` — "${snippet}"` : ""}`,
+				`group "${group}"${snippet ? ` - "${snippet}"` : ""}`,
 			);
 			if (cachedCsv) {
 				log.warn(`Serving stale cached orbital data for group "${group}" due to non-200 response (${response.status}).`);
@@ -130,7 +177,8 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 		}
 
 		if (isNotFoundNotice(csvData)) {
-			log.warn(`Celestrak rejected the query for group "${group}" — not a valid group name.`);
+			log.warn(`Celestrak rejected the query for group "${group}" - not a valid group name.`);
+			await noteMissingGroup(group);
 			const unknownGroup = new Error(`Group "${group}" is not a valid Celestrak group`);
 			(unknownGroup as any).statusCode = 404;
 			throw unknownGroup;
@@ -160,17 +208,15 @@ async function fetchTleUncoalesced(group: string, format: OrbitFormat = "tle", q
 
 		await kv.set(`${group}_${upstreamFormat}`, csvData);
 		await kv.set(`${group}_timestamp_${upstreamFormat}`, Date.now());
+		await kv.delete(missingKey(group));
 
 		const tleData = csvTo3le(csvData);
 		const jsonData = csvToJson(csvData);
 		const kvnData = csvToKvn(csvData);
 
-		await kv.set(`${group}_tle`, tleData);
-		await kv.set(`${group}_json`, jsonData);
-		await kv.set(`${group}_kvn`, kvnData);
-		await kv.set(`${group}_timestamp_tle`, Date.now());
-		await kv.set(`${group}_timestamp_json`, Date.now());
-		await kv.set(`${group}_timestamp_kvn`, Date.now());
+		setDerived(`${group}_tle`, tleData);
+		setDerived(`${group}_json`, jsonData);
+		setDerived(`${group}_kvn`, kvnData);
 
 		log.debug(`Successfully cached orbital data for group "${group}" (CSV + derived 3LE/JSON/KVN).`);
 

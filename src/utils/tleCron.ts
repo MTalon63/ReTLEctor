@@ -56,7 +56,7 @@ async function checkAndUpdateTles(warm = false): Promise<void> {
 		} catch (err) {
 			log.error(`Background cron failed to update group "${group}": ${err}`);
 			if ((await isCelestrakLockedOut()).locked) {
-				log.warn(`Stopping this update pass early — Celestrak lockout is in effect.`);
+				log.warn(`Stopping this update pass early - Celestrak lockout is in effect.`);
 				return;
 			}
 		}

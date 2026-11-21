@@ -2,6 +2,7 @@ import kv from "./kv";
 import config from "./config";
 import log from "./logger";
 import tleFetcher from "./tleFetcher";
+import { getDerived } from "./derived";
 import { isDerivedGroup, getSourceGroup, getDerivedGroupFormat, getDerivedGroupTimestamp } from "./derivedGroup";
 import type { OrbitFormat } from "./tleGetter";
 
@@ -75,7 +76,7 @@ async function handleGroupRequest(rawGroup: string, lastFetchedHeader: number, f
 		});
 	}
 
-	let tle = (await kv.get(`${group}_${format}`)) as string | null;
+	let tle = format === "csv" ? ((await kv.get(`${group}_csv`)) as string | null) : (getDerived(`${group}_${format}`) ?? null);
 
 	if (!tle) {
 		log.debug(`No cached orbital data for group "${group}", format "${format}". Fetching from Celestrak...`);

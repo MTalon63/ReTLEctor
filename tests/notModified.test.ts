@@ -64,4 +64,63 @@ describe("not-modified notice", () => {
 		expect(body).toContain("ISS (ZARYA)");
 		expect((await isCelestrakLockedOut()).locked).toBe(true);
 	});
+
+describe("group 404", () => {
+	test("an upstream 404 is cached instead of re-requested", async () => {
+		let hits = 0;
+		globalThis.fetch = (async () => {
+			hits++;
+			return new Response("Group not found", { status: 404 });
+		}) as unknown as typeof fetch;
+		await kv.delete("bogus-group_csv");
+		await kv.delete("group_missing:bogus-group");
+
+		await expect(fetchTle("bogus-group", "csv")).rejects.toThrow();
+		await expect(fetchTle("bogus-group", "csv")).rejects.toThrow();
+
+		expect(hits).toBe(1);
+		await kv.delete("group_missing:bogus-group");
+	});
+});
+
+describe("301 redirects", () => {
+	test("a redirect is followed once and the new endpoint is remembered", async () => {
+		const seen: string[] = [];
+		globalThis.fetch = (async (input: string | URL) => {
+			const url = String(input);
+			seen.push(url);
+			if (url.startsWith("https://celestrak.org/NORAD/elements/gp.php")) {
+				return new Response(null, {
+					status: 301,
+					headers: { location: "https://celestrak.org/NORAD/gp-new.php?GROUP=stations&FORMAT=csv" },
+				});
+			}
+			return new Response(CSV, { status: 200 });
+		}) as unknown as typeof fetch;
+		await kv.delete("celestrak_url_current");
+		await clearCelestrakFailures();
+
+		const body = await fetchTle("stations", "csv");
+
+		expect(body).toContain("ISS (ZARYA)");
+		expect(seen).toHaveLength(2);
+		expect(seen[1]).toContain("/NORAD/gp-new.php");
+		expect(seen[1]).toContain("GROUP=stations");
+		expect((await kv.get("celestrak_url_current")) as string).toBe("https://celestrak.org/NORAD/gp-new.php");
+	});
+
+	test("the remembered endpoint is used for the next refresh without a redirect", async () => {
+		const seen: string[] = [];
+		globalThis.fetch = (async (input: string | URL) => {
+			seen.push(String(input));
+			return new Response(CSV, { status: 200 });
+		}) as unknown as typeof fetch;
+
+		await fetchTle("stations", "csv");
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toContain("/NORAD/gp-new.php");
+		await kv.delete("celestrak_url_current");
+	});
+});
 });

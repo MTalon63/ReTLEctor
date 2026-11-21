@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import config from "../src/utils/config";
-import { notifyUpstreamFailure, notifyUpstreamRecovered, resetAlertState } from "../src/utils/alerts";
+import { notifyRedirect, notifyUpstreamFailure, notifyUpstreamRecovered, resetAlertState } from "../src/utils/alerts";
 
 const WEBHOOK = "https://discord.test/api/webhooks/123/abc";
 
@@ -110,5 +110,34 @@ describe("discord alerts", () => {
 		stubFetch(400);
 
 		await expect(notifyUpstreamFailure({ status: 503, context: "x", streak: 1, durationMs: 1000, untilIso: "x" })).resolves.toBeUndefined();
+	});
+
+	test("a 301 redirect alert carries both endpoints", async () => {
+		stubFetch();
+
+		await notifyRedirect({
+			status: 301,
+			context: 'group "active"',
+			from: "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv",
+			to: "https://celestrak.org/NORAD/gp-new.php",
+		});
+
+		expect(sent).toHaveLength(1);
+		const embed = sent[0]!.body.embeds![0]!;
+		expect(embed.title).toContain("HTTP 301");
+		expect(embed.color).toBe(0xfaa61a);
+		const values = (embed.fields ?? []).map((f) => f.value).join(" ");
+		expect(values).toContain("gp.php");
+		expect(values).toContain("gp-new.php");
+	});
+
+	test("redirect alerts are throttled", async () => {
+		stubFetch();
+		const alert = { status: 301, context: 'group "active"', from: "a", to: "b" };
+
+		await notifyRedirect(alert);
+		await notifyRedirect(alert);
+
+		expect(sent).toHaveLength(1);
 	});
 });

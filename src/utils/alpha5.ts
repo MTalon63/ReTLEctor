@@ -1,8 +1,8 @@
 const CODE_0 = 48; // '0'
 const CODE_9 = 57; // '9'
 const CODE_A = 65; // 'A'
-const CODE_I = 73; // 'I' — reserved
-const CODE_O = 79; // 'O' — reserved
+const CODE_I = 73; // 'I' - reserved
+const CODE_O = 79; // 'O' - reserved
 const CODE_Z = 90; // 'Z'
 
 const MAX_NORAD = 339999;

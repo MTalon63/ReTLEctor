@@ -214,4 +214,21 @@ describe("demo derived group", () => {
 
 		expect(ids).toEqual([1361, 40545, 67162]);
 	});
+
+describe("starlink derived from active", () => {
+	test("keeps only Starlink objects, case-insensitively", async () => {
+		const kv = (await import("../src/utils/kv")).default;
+		await kv.set("active_csv", mockCsv);
+
+		expect(isDerivedGroup("starlink")).toBe(true);
+		expect(getSourceGroup("starlink")).toBe("active");
+
+		const csv = await getDerivedGroupFormat("starlink", "csv");
+		const names = csv.trim().split("\n").slice(1).map((line) => line.split(",")[0]);
+
+		expect(names).toEqual(["STARLINK-1001", "STARLINK-1002", "STARLINK-3001", "starlink-1003"]);
+		expect(csv).not.toContain("ISS (ZARYA)");
+		expect(csv).not.toContain("HUBBLE");
+	});
+});
 });
