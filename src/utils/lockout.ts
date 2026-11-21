@@ -7,6 +7,10 @@ export const LOCKOUT_KEY = "celestrak_lockout_until";
 export const FAILURE_STREAK_KEY = "celestrak_failure_streak";
 const SERVER_STREAK_KEY = "celestrak_server_error_streak";
 const NETWORK_STREAK_KEY = "celestrak_network_streak";
+const LAST_FAILURE_KEY = "celestrak_last_failure_at";
+
+// A success in the middle of a failing burst must not reset the ladder, or we retry every 5 min.
+const RESET_QUIET_MS = 30 * 60 * 1000;
 
 export type FailureKind = number | "network";
 
@@ -50,7 +54,19 @@ export async function getFailureStreak(): Promise<number> {
 	return ((await kv.get(FAILURE_STREAK_KEY)) as number | null) || 0;
 }
 
+// Force-clears every piece of upstream failure state; tests need this, the quiet window forbids it.
+export async function resetCelestrakState(): Promise<void> {
+	await kv.delete(LOCKOUT_KEY);
+	await kv.delete(FAILURE_STREAK_KEY);
+	await kv.delete(SERVER_STREAK_KEY);
+	await kv.delete(NETWORK_STREAK_KEY);
+	await kv.delete(LAST_FAILURE_KEY);
+}
+
 export async function clearCelestrakFailures(): Promise<void> {
+	const lastFailure = ((await kv.get(LAST_FAILURE_KEY)) as number | null) || 0;
+	if (Date.now() - lastFailure < RESET_QUIET_MS) return;
+
 	const streak = ((await kv.get(FAILURE_STREAK_KEY)) as number | null) || 0;
 
 	await kv.delete(SERVER_STREAK_KEY);
@@ -89,6 +105,7 @@ export async function triggerCelestrakLockout(status: FailureKind, context: stri
 	const streakKey = streakKeyFor(status);
 	const streak = (((await kv.get(streakKey)) as number | null) || 0) + 1;
 	await kv.set(streakKey, streak);
+	await kv.set(LAST_FAILURE_KEY, Date.now());
 
 	const duration = lockoutDurationFor(status, streak);
 	const lockoutUntil = Date.now() + duration;

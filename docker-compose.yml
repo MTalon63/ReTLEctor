@@ -13,6 +13,8 @@ services:
             - RATE_LIMIT_MAX_REQUESTS=60 # Maximum number of requests allowed within the rate limit window.
             - RATE_LIMIT_WINDOW=60 # Duration of the rate limit window in seconds.
             - KV_FILE=./data/kv.json # Path to the key-value store file.
+            - UPSTREAM_TIMEOUT=60 # Seconds to wait for response headers.
+            - UPSTREAM_STALL=30 # Abort a download only when no bytes arrive for this long.
             - KV_WRITE_DELAY=1000 # ms to batch KV writes (cache only, safe to lose on crash)
             - LOG_LEVEL=info # Log level (e.g., debug, info, warn, error).
             - PORT=3000 # Port to run the server on.

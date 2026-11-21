@@ -32,18 +32,6 @@ async function validateKvOnBootup(): Promise<void> {
 			}
 
 		}
-
-		// Derived formats are memory-only now; drop the blobs older builds left behind.
-		for (const format of config.formats) {
-			if (format === "csv") continue;
-			const dataKey = `${group}_${format}`;
-			const tsKey = `${group}_timestamp_${format}`;
-			if ((await kv.get(dataKey)) !== undefined) {
-				await kv.delete(dataKey);
-				await kv.delete(tsKey);
-				purged++;
-			}
-		}
 	}
 
 	if (purged > 0) {

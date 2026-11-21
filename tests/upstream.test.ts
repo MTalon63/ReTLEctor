@@ -3,9 +3,10 @@ import kv from "../src/utils/kv";
 import config from "../src/utils/config";
 import { coalesce, serialize, upstreamFetch, resetUpstreamState } from "../src/utils/upstream";
 import {
+	clearCelestrakFailures,
 	FAILURE_STREAK_KEY,
 	LOCKOUT_KEY,
-	clearCelestrakFailures,
+	resetCelestrakState,
 	getFailureStreak,
 	isCelestrakLockedOut,
 	triggerCelestrakLockout,
@@ -14,7 +15,7 @@ import {
 afterEach(async () => {
 	resetUpstreamState();
 	await kv.delete(LOCKOUT_KEY);
-	await clearCelestrakFailures();
+	await resetCelestrakState();
 });
 
 describe("coalesce", () => {
@@ -117,7 +118,7 @@ describe("upstreamFetch", () => {
 describe("failure backoff", () => {
 	test("network failures escalate instead of retrying on a fixed interval", async () => {
 		await kv.delete(LOCKOUT_KEY);
-		await clearCelestrakFailures();
+		await resetCelestrakState();
 
 		const first = (await triggerCelestrakLockout("network", "test"))!;
 		const second = (await triggerCelestrakLockout("network", "test"))!;
@@ -128,7 +129,7 @@ describe("failure backoff", () => {
 
 	test("a 5xx pause stays short and does not inherit the block ladder", async () => {
 		await kv.delete(LOCKOUT_KEY);
-		await clearCelestrakFailures();
+		await resetCelestrakState();
 
 		const blocked = (await triggerCelestrakLockout(403, "test"))!;
 		const serverError = (await triggerCelestrakLockout(503, "test"))!;
@@ -139,7 +140,7 @@ describe("failure backoff", () => {
 
 	test("repeated HTTP blocks escalate past the base lockout duration", async () => {
 		await kv.delete(LOCKOUT_KEY);
-		await clearCelestrakFailures();
+		await resetCelestrakState();
 
 		const first = (await triggerCelestrakLockout(403, "test"))!;
 		const second = (await triggerCelestrakLockout(403, "test"))!;
@@ -148,11 +149,55 @@ describe("failure backoff", () => {
 		expect(second - first).toBeGreaterThanOrEqual(config.celestrakLockDuration);
 	});
 
-	test("a successful fetch resets the streak", async () => {
+	test("a success right after a failure keeps the ladder", async () => {
 		await triggerCelestrakLockout(403, "test");
 		expect(await getFailureStreak()).toBe(1);
 
 		await clearCelestrakFailures();
+		expect(await getFailureStreak()).toBe(1);
+	});
+
+	test("a success after a quiet window resets the streak", async () => {
+		await triggerCelestrakLockout(403, "test");
+		await kv.set("celestrak_last_failure_at", Date.now() - 31 * 60 * 1000);
+
+		await clearCelestrakFailures();
 		expect(await kv.get(FAILURE_STREAK_KEY)).toBeFalsy();
+	});
+
+	test("a stalled download is aborted", async () => {
+		config.upstreamStallMs = 60;
+		globalThis.fetch = (async () =>
+			new Response(
+				new ReadableStream({
+					start(stream) {
+						stream.enqueue(new TextEncoder().encode("partial"));
+					},
+				}),
+			)) as unknown as typeof fetch;
+
+		const response = await upstreamFetch("https://example.test/stall");
+
+		await expect(response.text()).rejects.toThrow();
+	});
+
+	test("a slow but progressing download completes", async () => {
+		config.upstreamStallMs = 120;
+		globalThis.fetch = (async () =>
+			new Response(
+				new ReadableStream({
+					async start(stream) {
+						for (let i = 0; i < 3; i++) {
+							stream.enqueue(new TextEncoder().encode("ab"));
+							await new Promise((resolve) => setTimeout(resolve, 40));
+						}
+						stream.close();
+					},
+				}),
+			)) as unknown as typeof fetch;
+
+		const response = await upstreamFetch("https://example.test/slow");
+
+		expect(await response.text()).toBe("ababab");
 	});
 });

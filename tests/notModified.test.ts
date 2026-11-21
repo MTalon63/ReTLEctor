@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import kv from "../src/utils/kv";
 import config from "../src/utils/config";
 import { resetUpstreamState } from "../src/utils/upstream";
-import { clearCelestrakFailures, isCelestrakLockedOut } from "../src/utils/lockout";
+import { resetCelestrakState, isCelestrakLockedOut } from "../src/utils/lockout";
 import fetchTle from "../src/utils/tleFetcher";
 
 const CSV = `OBJECT_NAME,OBJECT_ID,EPOCH,MEAN_MOTION,ECCENTRICITY,INCLINATION,RA_OF_ASC_NODE,ARG_OF_PERICENTER,MEAN_ANOMALY,EPHEMERIS_TYPE,CLASSIFICATION_TYPE,NORAD_CAT_ID,ELEMENT_SET_NO,REV_AT_EPOCH,BSTAR,MEAN_MOTION_DOT,MEAN_MOTION_DDOT
@@ -17,7 +17,7 @@ const originalSpacing = config.upstreamMinSpacingMs;
 
 beforeEach(async () => {
 	resetUpstreamState();
-	await clearCelestrakFailures();
+	await resetCelestrakState();
 	config.upstreamMinSpacingMs = 0;
 	await kv.set("stations_csv", CSV);
 	await kv.set("stations_timestamp_csv", Date.now() - 5 * 60 * 60 * 1000);
@@ -26,7 +26,7 @@ beforeEach(async () => {
 afterEach(async () => {
 	globalThis.fetch = originalFetch;
 	config.upstreamMinSpacingMs = originalSpacing;
-	await clearCelestrakFailures();
+	await resetCelestrakState();
 });
 
 describe("not-modified notice", () => {
@@ -98,7 +98,7 @@ describe("301 redirects", () => {
 			return new Response(CSV, { status: 200 });
 		}) as unknown as typeof fetch;
 		await kv.delete("celestrak_url_current");
-		await clearCelestrakFailures();
+		await resetCelestrakState();
 
 		const body = await fetchTle("stations", "csv");
 
